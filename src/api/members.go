@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"time"
 
-	cfg "ibp-geodns/src/common/config"
-	data2 "ibp-geodns/src/common/data2"
-	log "ibp-geodns/src/common/logging"
+	cfg "github.com/ibp-network/ibp-geodns-libs/config"
+	data2 "github.com/ibp-network/ibp-geodns-libs/data2"
+	log "github.com/ibp-network/ibp-geodns-libs/logging"
 )
 
 type MemberInfo struct {

@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	cfg "ibp-geodns/src/common/config"
+	cfg "github.com/ibp-network/ibp-geodns-libs/config"
 )
 
 // ServiceInfo represents the enhanced service information
