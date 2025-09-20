@@ -5,9 +5,9 @@ import (
 	"os"
 	"time"
 
-	billing "ibp-geodns-collator/src/billing"
+	billing "github.com/ibp-network/ibp-geodns-collator/src/billing"
 
-	api "ibp-geodns-collator/src/api"
+	api "github.com/ibp-network/ibp-geodns-collator/src/api"
 
 	nats "github.com/ibp-network/ibp-geodns-libs/nats"
 

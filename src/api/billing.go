@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	billing "ibp-geodns-collator/src/billing"
+	billing "github.com/ibp-network/ibp-geodns-collator/src/billing"
 
 	cfg "github.com/ibp-network/ibp-geodns-libs/config"
 	data2 "github.com/ibp-network/ibp-geodns-libs/data2"

@@ -1,4 +1,4 @@
-module ibp-geodns-collator
+module github.com/ibp-network/ibp-geodns-collator
 
 go 1.24.2
 
