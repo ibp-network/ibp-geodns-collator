@@ -39,6 +39,10 @@ func main() {
 	matrix.Init() // outbound Matrix alerts
 	data2.Init()  // collator local DB layer - CHANGED: now synchronous
 
+	if err := migrateMemberEventCheckTypesToNumeric(); err != nil {
+		log.Log(log.Error, "[collator] check_type numeric migration failed: %v", err)
+	}
+
 	// Wait a moment to ensure DB is fully ready
 	time.Sleep(2 * time.Second)
 
