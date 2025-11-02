@@ -39,6 +39,12 @@ func main() {
 	matrix.Init() // outbound Matrix alerts
 	data2.Init()  // collator local DB layer - CHANGED: now synchronous
 
+	// Normalize any legacy check_type values and keep future ones tidy
+	if err := normalizeMemberEventCheckTypes(); err != nil {
+		log.Log(log.Error, "[collator] initial check_type normalization failed: %v", err)
+	}
+	startMemberEventCheckTypeNormalizer()
+
 	// Wait a moment to ensure DB is fully ready
 	time.Sleep(2 * time.Second)
 
