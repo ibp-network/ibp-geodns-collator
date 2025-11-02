@@ -255,6 +255,8 @@ func getSLABreakdown(sla SLASummary, member, service string) SLABreakdown {
 // MemberStats holds DNS request statistics for a member
 type MemberStats struct {
 	RequestCount int
+	CanonicalID  string
+	IsAlias      bool
 }
 
 // calculateMemberStats queries the database for member request statistics
@@ -314,15 +316,24 @@ func calculateMemberStats(month time.Time) map[string]MemberStats {
 		}
 
 		if memberName != "(none)" {
-			// Store stats using the Details.Name as key
-			stats[memberName] = MemberStats{
-				RequestCount: totalHits,
+			canonicalID, exists := nameToMemberID[memberName]
+			if !exists || canonicalID == "" {
+				canonicalID = memberName
 			}
 
-			// Also store using member ID if we have a mapping
-			if memberID, exists := nameToMemberID[memberName]; exists && memberID != memberName {
-				stats[memberID] = MemberStats{
+			// Store canonical entry (used by config member IDs)
+			stats[canonicalID] = MemberStats{
+				RequestCount: totalHits,
+				CanonicalID:  canonicalID,
+				IsAlias:      false,
+			}
+
+			// Store alias entry for lookups by database/member display name
+			if canonicalID != memberName {
+				stats[memberName] = MemberStats{
 					RequestCount: totalHits,
+					CanonicalID:  canonicalID,
+					IsAlias:      true,
 				}
 			}
 		}

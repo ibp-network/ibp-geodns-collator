@@ -137,14 +137,6 @@ func writeMonthlyOverviewPDF(sum *Summary, sla SLASummary, outDir string, month 
 			}
 		}
 
-		// Sort by level descending, then alphabetically
-		sort.Slice(memberData, func(i, j int) bool {
-			if memberData[i].level != memberData[j].level {
-				return memberData[i].level > memberData[j].level
-			}
-			return memberData[i].name < memberData[j].name
-		})
-
 		row.serviceCount = len(sum.Members[mem].ServiceCosts)
 		totalUptime := 0.0
 		uptimeCount := 0
@@ -182,6 +174,12 @@ func writeMonthlyOverviewPDF(sum *Summary, sla SLASummary, outDir string, month 
 	}
 
 	if len(memberData) > 0 {
+		sort.Slice(memberData, func(i, j int) bool {
+			if memberData[i].level != memberData[j].level {
+				return memberData[i].level > memberData[j].level
+			}
+			return memberData[i].name < memberData[j].name
+		})
 		avgNetworkUptime = avgNetworkUptime / float64(len(memberData))
 	}
 
@@ -1000,6 +998,9 @@ func calculateTotalRequests(month time.Time) int {
 	stats := calculateMemberStats(month)
 	total := 0
 	for _, s := range stats {
+		if s.IsAlias {
+			continue
+		}
 		total += s.RequestCount
 	}
 	return total

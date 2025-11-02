@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,10 @@ import (
 
 	"github.com/phpdave11/gofpdf"
 )
+
+const maxLogoBytes int64 = 5 << 20 // 5 MiB
+
+var logoDownloadTimeout = 10 * time.Second
 
 // downloadMemberLogo downloads a member's logo to the tmp/member_logos directory
 func downloadMemberLogo(memberName, logoURL, baseDir string) string {
@@ -39,13 +44,32 @@ func downloadMemberLogo(memberName, logoURL, baseDir string) string {
 		return logoPath
 	}
 
-	// Download the logo
-	resp, err := http.Get(logoURL)
+	// Download the logo with timeout and basic validation
+	ctx, cancel := context.WithTimeout(context.Background(), logoDownloadTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, logoURL, nil)
+	if err != nil {
+		log.Log(log.Error, "[billing] Failed to create request for logo %s: %v", memberName, err)
+		return ""
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Log(log.Error, "[billing] Failed to download logo for %s: %v", memberName, err)
 		return ""
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		log.Log(log.Error, "[billing] Failed to download logo for %s: unexpected status %d", memberName, resp.StatusCode)
+		return ""
+	}
+
+	if contentType := strings.ToLower(resp.Header.Get("Content-Type")); contentType != "" && !strings.HasPrefix(contentType, "image/") {
+		log.Log(log.Error, "[billing] Skipping logo download for %s: unsupported content type %s", memberName, contentType)
+		return ""
+	}
 
 	// Create the file
 	file, err := os.Create(logoPath)
@@ -55,11 +79,20 @@ func downloadMemberLogo(memberName, logoURL, baseDir string) string {
 	}
 	defer file.Close()
 
-	// Copy the logo
-	_, err = io.Copy(file, resp.Body)
+	// Copy the logo with size limit
+	reader := io.LimitReader(resp.Body, maxLogoBytes+1)
+	written, err := io.Copy(file, reader)
 	if err != nil {
 		log.Log(log.Error, "[billing] Failed to save logo for %s: %v", memberName, err)
+		file.Close()
 		os.Remove(logoPath)
+		return ""
+	}
+
+	if written > maxLogoBytes {
+		file.Close()
+		os.Remove(logoPath)
+		log.Log(log.Error, "[billing] Logo for %s exceeds size limit (%d bytes)", memberName, written)
 		return ""
 	}
 

@@ -48,8 +48,11 @@ var billingStore struct {
 }
 
 // Track last generated billing month to avoid duplicates
-var lastGeneratedBillingMonth time.Time
-var billingGenMutex sync.Mutex
+var (
+	lastGeneratedBillingMonth   time.Time
+	billingGenMutex             sync.Mutex
+	billingGenerationInProgress bool
+)
 
 // GetSummary returns a deep-copy of the current billing snapshot.
 func GetSummary() Summary {
@@ -261,8 +264,23 @@ func generateMonthlyBillingPDF() {
 		log.Log(log.Info, "[billing] Member billing PDF already generated for %s", billingMonth.Format("January 2006"))
 		return
 	}
-	lastGeneratedBillingMonth = billingMonth
+	if billingGenerationInProgress {
+		billingGenMutex.Unlock()
+		log.Log(log.Info, "[billing] Member billing PDF generation already in progress for %s", billingMonth.Format("January 2006"))
+		return
+	}
+	billingGenerationInProgress = true
 	billingGenMutex.Unlock()
+
+	success := false
+	defer func() {
+		billingGenMutex.Lock()
+		billingGenerationInProgress = false
+		if success && lastGeneratedBillingMonth.Before(billingMonth) {
+			lastGeneratedBillingMonth = billingMonth
+		}
+		billingGenMutex.Unlock()
+	}()
 
 	log.Log(log.Info, "[billing] Starting member billing PDF generation for %s", billingMonth.Format("January 2006"))
 
@@ -309,17 +327,26 @@ func generateMonthlyBillingPDF() {
 	}
 
 	// Generate the monthly overview PDF
+	hadError := false
 	if err := writeMonthlyOverviewPDF(&snap, sla, monthDir, billingMonth); err != nil {
+		hadError = true
 		log.Log(log.Error, "[billing] failed to write monthly overview PDF: %v", err)
 	}
 
 	// Generate individual member PDFs
 	for memberName := range snap.Members {
 		if err := writeMemberPDF(memberName, &snap, sla, monthDir, billingMonth); err != nil {
+			hadError = true
 			log.Log(log.Error, "[billing] failed to write member PDF for %s: %v", memberName, err)
 		}
 	}
 
+	if hadError {
+		log.Log(log.Warn, "[billing] Monthly billing generation for %s completed with errors; will retry on next run", billingMonth.Format("January 2006"))
+		return
+	}
+
+	success = true
 	log.Log(log.Info, "[billing] Monthly billing generation completed for %s", billingMonth.Format("January 2006"))
 }
 
