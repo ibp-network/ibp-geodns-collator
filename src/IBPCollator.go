@@ -103,6 +103,31 @@ func normalizeMemberEventCheckTypes() error {
 		return nil
 	}
 
+	// Remove any string check_type rows that would collide once numeric rows are converted
+	deleteRes, err := data2.DB.Exec(`
+		DELETE t
+		FROM member_events AS t
+		JOIN member_events AS n
+		  ON n.check_type IN ('1','2','3')
+		 AND t.check_type = CASE n.check_type
+			WHEN '1' THEN 'site'
+			WHEN '2' THEN 'domain'
+			WHEN '3' THEN 'endpoint'
+		END
+		 AND t.check_name = n.check_name
+		 AND COALESCE(t.domain_name, '') = COALESCE(n.domain_name, '')
+		 AND COALESCE(t.endpoint, '') = COALESCE(n.endpoint, '')
+		 AND t.member_name = n.member_name
+		 AND t.is_ipv6 = n.is_ipv6
+	`)
+	if err != nil {
+		return err
+	}
+
+	if rows, err := deleteRes.RowsAffected(); err == nil && rows > 0 {
+		log.Log(log.Debug, "[collator] removed %d conflicting member_events row(s) prior to normalization", rows)
+	}
+
 	res, err := data2.DB.Exec(`
 		UPDATE member_events
 		SET check_type = CASE check_type
