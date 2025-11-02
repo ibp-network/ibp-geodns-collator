@@ -147,7 +147,7 @@ func calculateServiceDowntime(memberName, serviceName string, domains []string, 
 			end_time
 		FROM member_events
 		WHERE member_name = ?
-		AND check_type = 'site'
+		AND check_type IN ('site', '1')
 		AND status = 0
 		AND (
 			-- Event starts before period and ends during or after period
@@ -211,7 +211,7 @@ func calculateServiceDowntime(memberName, serviceName string, domains []string, 
 				end_time
 			FROM member_events
 			WHERE member_name = ?
-		AND check_type IN ('domain', 'endpoint')
+		AND check_type IN ('domain', '2', 'endpoint', '3')
 			AND status = 0
 			AND domain_name IN (%s)
 			AND (

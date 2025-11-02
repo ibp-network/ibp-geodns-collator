@@ -15,6 +15,8 @@ import (
 	data2 "github.com/ibp-network/ibp-geodns-libs/data2"
 	log "github.com/ibp-network/ibp-geodns-libs/logging"
 
+	common "github.com/ibp-network/ibp-geodns-collator/src/common"
+
 	"github.com/phpdave11/gofpdf"
 )
 
@@ -691,7 +693,7 @@ func getServiceDowntimeEvents(memberName, serviceName string, month time.Time) [
 			is_ipv6
 		FROM member_events
 		WHERE member_name = ?
-		AND check_type = 'site'
+		AND check_type IN ('site', '1')
 		AND status = 0
 		AND (
 			(start_time < ? AND (end_time IS NULL OR end_time > ?))
@@ -724,6 +726,8 @@ func getServiceDowntimeEvents(memberName, serviceName string, month time.Time) [
 				log.Log(log.Error, "[billing] Failed to scan site downtime event: %v", err)
 				continue
 			}
+
+			event.CheckType = common.NormalizeCheckType(event.CheckType)
 
 			// Adjust times to be within month
 			if event.StartTime.Before(startTime) {
@@ -769,7 +773,7 @@ func getServiceDowntimeEvents(memberName, serviceName string, month time.Time) [
 				is_ipv6
 			FROM member_events
 			WHERE member_name = ?
-			AND check_type IN ('domain', 'endpoint')
+			AND check_type IN ('domain', '2', 'endpoint', '3')
 			AND status = 0
 			AND domain_name IN (%s)
 			AND (
@@ -805,6 +809,8 @@ func getServiceDowntimeEvents(memberName, serviceName string, month time.Time) [
 				log.Log(log.Error, "[billing] Failed to scan downtime event: %v", err)
 				continue
 			}
+
+			event.CheckType = common.NormalizeCheckType(event.CheckType)
 
 			// Adjust times to be within month
 			if event.StartTime.Before(startTime) {
@@ -931,6 +937,8 @@ func getMemberDowntimeEvents(memberName string, month time.Time) []DowntimeEvent
 			log.Log(log.Error, "[billing] Failed to scan downtime event: %v", err)
 			continue
 		}
+
+		event.CheckType = common.NormalizeCheckType(event.CheckType)
 
 		// Adjust times to be within month
 		if event.StartTime.Before(startTime) {

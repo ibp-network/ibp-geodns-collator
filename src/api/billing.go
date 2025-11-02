@@ -13,6 +13,8 @@ import (
 	cfg "github.com/ibp-network/ibp-geodns-libs/config"
 	data2 "github.com/ibp-network/ibp-geodns-libs/data2"
 	log "github.com/ibp-network/ibp-geodns-libs/logging"
+
+	common "github.com/ibp-network/ibp-geodns-collator/src/common"
 )
 
 type BillingMember struct {
@@ -271,7 +273,7 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 			is_ipv6
 		FROM member_events
 		WHERE member_name = ?
-		AND check_type = 'site'
+		AND check_type IN ('site', '1')
 		AND status = 0
 		AND (
 			(start_time < ? AND (end_time IS NULL OR end_time > ?))
@@ -309,7 +311,7 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 			}
 
 			event.MemberName = memberName
-			event.IsIPv6 = isIPv6 == 1
+			event.CheckType = common.NormalizeCheckType(event.CheckType)
 			if domainName.Valid {
 				event.DomainName = domainName.String
 			}
@@ -413,7 +415,7 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 		}
 
 		event.MemberName = memberName
-		event.IsIPv6 = isIPv6 == 1
+		event.CheckType = common.NormalizeCheckType(event.CheckType)
 		if domainName.Valid {
 			event.DomainName = domainName.String
 		}

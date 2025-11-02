@@ -8,6 +8,7 @@ import (
 	"time"
 
 	billing "github.com/ibp-network/ibp-geodns-collator/src/billing"
+	common "github.com/ibp-network/ibp-geodns-collator/src/common"
 
 	cfg "github.com/ibp-network/ibp-geodns-libs/config"
 	data2 "github.com/ibp-network/ibp-geodns-libs/data2"
@@ -41,6 +42,7 @@ func handleDowntimeEvents(w http.ResponseWriter, r *http.Request) {
 	service := sanitizeString(r.URL.Query().Get("service"))
 	domain := sanitizeString(r.URL.Query().Get("domain"))
 	checkType := sanitizeString(r.URL.Query().Get("check_type"))
+	normalizedCheckType := common.NormalizeCheckType(checkType)
 	status := sanitizeString(r.URL.Query().Get("status"))
 
 	// Validate member name (use new function that allows spaces)
@@ -62,7 +64,7 @@ func handleDowntimeEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate check type
-	if checkType != "" && checkType != "site" && checkType != "domain" && checkType != "endpoint" {
+	if checkType != "" && normalizedCheckType != "site" && normalizedCheckType != "domain" && normalizedCheckType != "endpoint" {
 		writeError(w, http.StatusBadRequest, "Invalid check type")
 		return
 	}
@@ -105,8 +107,15 @@ func handleDowntimeEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if checkType != "" {
-		query += " AND check_type = ?"
-		args = append(args, checkType)
+		values := common.ExpandCheckTypeValues(checkType)
+		placeholders := make([]string, 0, len(values))
+		for range values {
+			placeholders = append(placeholders, "?")
+		}
+		query += " AND check_type IN (" + strings.Join(placeholders, ",") + ")"
+		for _, v := range values {
+			args = append(args, v)
+		}
 	}
 
 	if status == "ongoing" {
@@ -148,6 +157,8 @@ func handleDowntimeEvents(w http.ResponseWriter, r *http.Request) {
 			log.Log(log.Error, "[CollatorAPI] Failed to scan downtime event: %v", err)
 			continue
 		}
+
+		event.CheckType = common.NormalizeCheckType(event.CheckType)
 
 		event.IsIPv6 = isIPv6 == 1
 
@@ -233,6 +244,8 @@ func handleCurrentDowntime(w http.ResponseWriter, r *http.Request) {
 			log.Log(log.Error, "[CollatorAPI] Failed to scan current downtime: %v", err)
 			continue
 		}
+
+		event.CheckType = common.NormalizeCheckType(event.CheckType)
 
 		event.IsIPv6 = isIPv6 == 1
 		event.Status = "ongoing"

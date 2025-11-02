@@ -19,8 +19,6 @@ import (
 
 var version = cfg.GetVersion()
 
-const checkTypeNormalizeInterval = 5 * time.Second
-
 func main() {
 	log.Log(log.Info, "IBPCollator v%s starting …", version)
 
@@ -40,12 +38,6 @@ func main() {
 	// ── subsystems ──────────────────────────────────────────────────────────────
 	matrix.Init() // outbound Matrix alerts
 	data2.Init()  // collator local DB layer - CHANGED: now synchronous
-
-	// Normalize any legacy check_type values and keep future ones tidy
-	if err := normalizeMemberEventCheckTypes(); err != nil {
-		log.Log(log.Error, "[collator] initial check_type normalization failed: %v", err)
-	}
-	startMemberEventCheckTypeNormalizer()
 
 	// Wait a moment to ensure DB is fully ready
 	time.Sleep(2 * time.Second)
@@ -81,70 +73,4 @@ func main() {
 	for {
 		time.Sleep(1 * time.Hour)
 	}
-}
-
-func startMemberEventCheckTypeNormalizer() {
-	go func() {
-		ticker := time.NewTicker(checkTypeNormalizeInterval)
-		defer ticker.Stop()
-
-		for {
-			if err := normalizeMemberEventCheckTypes(); err != nil {
-				log.Log(log.Error, "[collator] normalize member_events check_type: %v", err)
-			}
-
-			<-ticker.C
-		}
-	}()
-}
-
-func normalizeMemberEventCheckTypes() error {
-	if data2.DB == nil {
-		return nil
-	}
-
-	// Remove any string check_type rows that would collide once numeric rows are converted
-	deleteRes, err := data2.DB.Exec(`
-		DELETE t
-		FROM member_events AS t
-		JOIN member_events AS n
-		  ON n.check_type IN ('1','2','3')
-		 AND t.check_type = CASE n.check_type
-			WHEN '1' THEN 'site'
-			WHEN '2' THEN 'domain'
-			WHEN '3' THEN 'endpoint'
-		END
-		 AND t.check_name = n.check_name
-		 AND COALESCE(t.domain_name, '') = COALESCE(n.domain_name, '')
-		 AND COALESCE(t.endpoint, '') = COALESCE(n.endpoint, '')
-		 AND t.member_name = n.member_name
-		 AND t.is_ipv6 = n.is_ipv6
-	`)
-	if err != nil {
-		return err
-	}
-
-	if rows, err := deleteRes.RowsAffected(); err == nil && rows > 0 {
-		log.Log(log.Debug, "[collator] removed %d conflicting member_events row(s) prior to normalization", rows)
-	}
-
-	res, err := data2.DB.Exec(`
-		UPDATE member_events
-		SET check_type = CASE check_type
-			WHEN '1' THEN 'site'
-			WHEN '2' THEN 'domain'
-			WHEN '3' THEN 'endpoint'
-			ELSE check_type
-		END
-		WHERE check_type IN ('1','2','3')
-	`)
-	if err != nil {
-		return err
-	}
-
-	if rows, err := res.RowsAffected(); err == nil && rows > 0 {
-		log.Log(log.Debug, "[collator] normalized %d member_events check_type row(s)", rows)
-	}
-
-	return nil
 }
