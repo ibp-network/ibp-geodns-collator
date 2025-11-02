@@ -63,9 +63,12 @@ func CalculateSLAAdjustments(month time.Time, sum *Summary) (SLASummary, error) 
 		}
 	}
 
-	// Build service to domains mapping
+	// Build service to domains mapping (active services only)
 	serviceToDomains := make(map[string][]string)
 	for svcName, svc := range c.Services {
+		if svc.Configuration.Active != 1 {
+			continue
+		}
 		domains := []string{}
 		for _, provider := range svc.Providers {
 			for _, rpcUrl := range provider.RpcUrls {
@@ -86,6 +89,11 @@ func CalculateSLAAdjustments(month time.Time, sum *Summary) (SLASummary, error) 
 		dbMemberName := memberIDToDBName[memberID]
 
 		for svcKey := range m.ServiceCosts {
+			svcConfig, svcExists := c.Services[svcKey]
+			if !svcExists || svcConfig.Configuration.Active != 1 {
+				continue
+			}
+
 			// Calculate downtime for this specific service
 			downtime := calculateServiceDowntime(dbMemberName, svcKey, serviceToDomains[svcKey], startTime, endTime)
 

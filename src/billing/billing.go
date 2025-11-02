@@ -197,6 +197,11 @@ func refresh(verbose bool) {
 					continue
 				}
 
+				if svc.Configuration.Active != 1 {
+					log.Log(log.Debug, "[billing] skipping inactive service %q for member %s", svcName, memName)
+					continue
+				}
+
 				cost := costForServiceInstance(svc.Resources, price)
 				memCost.ServiceCosts[svcName] += cost
 				memCost.Total += cost
