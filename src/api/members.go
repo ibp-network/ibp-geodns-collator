@@ -43,7 +43,7 @@ func handleMembers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get all members
-	var members []MemberInfo
+	members := make([]MemberInfo, 0, len(c.Members))
 	for name, member := range c.Members {
 		members = append(members, buildMemberInfo(name, member))
 	}
