@@ -184,6 +184,16 @@ func refresh(verbose bool) {
 			continue
 		}
 
+		// Skip members that are disabled or explicitly overridden
+		if mem.Service.Active != 1 {
+			log.Log(log.Debug, "[billing] skipping inactive member %s", memName)
+			continue
+		}
+		if mem.Override {
+			log.Log(log.Debug, "[billing] skipping override member %s", memName)
+			continue
+		}
+
 		memCost := MemberCost{
 			MemberName:   memName,
 			ServiceCosts: map[string]float64{},

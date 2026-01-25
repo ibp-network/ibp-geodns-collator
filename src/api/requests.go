@@ -74,6 +74,15 @@ func buildFilterConditions(filter RequestFilter, baseArgs []interface{}) (string
 	conditions := []string{}
 	args := append([]interface{}{}, baseArgs...)
 
+	// If services are provided, expand them into their associated domains so that
+	// service filters actually constrain the query.
+	if len(filter.Services) > 0 {
+		serviceDomains := convertServicesToDomains(filter.Services)
+		if len(serviceDomains) > 0 {
+			filter.Domains = append(filter.Domains, serviceDomains...)
+		}
+	}
+
 	if len(filter.Countries) > 0 {
 		placeholders := make([]string, len(filter.Countries))
 		for i, country := range filter.Countries {
@@ -111,8 +120,19 @@ func buildFilterConditions(filter RequestFilter, baseArgs []interface{}) (string
 	}
 
 	if len(filter.Domains) > 0 {
-		placeholders := make([]string, len(filter.Domains))
-		for i, domain := range filter.Domains {
+		// de-duplicate domains to keep placeholder count minimal
+		domainSet := make(map[string]struct{}, len(filter.Domains))
+		domainList := make([]string, 0, len(filter.Domains))
+		for _, domain := range filter.Domains {
+			if _, seen := domainSet[domain]; seen {
+				continue
+			}
+			domainSet[domain] = struct{}{}
+			domainList = append(domainList, domain)
+		}
+
+		placeholders := make([]string, len(domainList))
+		for i, domain := range domainList {
 			placeholders[i] = "?"
 			args = append(args, domain)
 		}

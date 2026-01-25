@@ -196,12 +196,14 @@ func handleServicesSummary(w http.ResponseWriter, r *http.Request) {
 			activeCount++
 		}
 
-		// Sum resources
-		totalResources.Nodes += service.Resources.Nodes
-		totalResources.Cores += service.Resources.Cores * float64(service.Resources.Nodes)
-		totalResources.Memory += service.Resources.Memory * float64(service.Resources.Nodes)
-		totalResources.Disk += service.Resources.Disk * float64(service.Resources.Nodes)
-		totalResources.Bandwidth += service.Resources.Bandwidth * float64(service.Resources.Nodes)
+		// Sum resources only for active services to avoid inflating totals
+		if service.Configuration.Active == 1 {
+			totalResources.Nodes += service.Resources.Nodes
+			totalResources.Cores += service.Resources.Cores * float64(service.Resources.Nodes)
+			totalResources.Memory += service.Resources.Memory * float64(service.Resources.Nodes)
+			totalResources.Disk += service.Resources.Disk * float64(service.Resources.Nodes)
+			totalResources.Bandwidth += service.Resources.Bandwidth * float64(service.Resources.Nodes)
+		}
 	}
 
 	summary := map[string]interface{}{
