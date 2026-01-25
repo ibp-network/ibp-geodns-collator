@@ -147,7 +147,7 @@ func calculateServiceDowntime(memberName, serviceName string, domains []string, 
 			end_time
 		FROM member_events
 		WHERE member_name = ?
-		AND check_type IN ('site', '1')
+		AND LOWER(check_type) IN ('site', '1')
 		AND status = 0
 		AND (
 			-- Event starts before period and ends during or after period
@@ -190,12 +190,24 @@ func calculateServiceDowntime(memberName, serviceName string, domains []string, 
 
 	// Query for domain/endpoint checks specific to this service
 	if len(domains) > 0 {
+		// normalize and de-duplicate domains to align with LOWER(...) matching on a binary column
+		domainSet := make(map[string]struct{}, len(domains))
+		lowerDomains := make([]string, 0, len(domains))
+		for _, d := range domains {
+			ld := strings.ToLower(d)
+			if _, exists := domainSet[ld]; exists {
+				continue
+			}
+			domainSet[ld] = struct{}{}
+			lowerDomains = append(lowerDomains, ld)
+		}
+
 		// Build parameterized query
-		placeholders := make([]string, len(domains))
-		args := make([]interface{}, 0, len(domains)+5)
+		placeholders := make([]string, len(lowerDomains))
+		args := make([]interface{}, 0, len(lowerDomains)+5)
 		args = append(args, memberName)
 
-		for i, domain := range domains {
+		for i, domain := range lowerDomains {
 			placeholders[i] = "?"
 			args = append(args, domain)
 		}
@@ -211,9 +223,9 @@ func calculateServiceDowntime(memberName, serviceName string, domains []string, 
 				end_time
 			FROM member_events
 			WHERE member_name = ?
-		AND check_type IN ('domain', '2', 'endpoint', '3')
+		AND LOWER(check_type) IN ('domain', '2', 'endpoint', '3')
 			AND status = 0
-			AND domain_name IN (%s)
+			AND LOWER(domain_name) IN (%s)
 			AND (
 				-- Event starts before period and ends during or after period
 				(start_time < ? AND (end_time IS NULL OR end_time > ?))

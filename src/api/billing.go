@@ -250,7 +250,7 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 		for _, provider := range svc.Providers {
 			for _, rpcUrl := range provider.RpcUrls {
 				if domain := extractDomainFromURL(rpcUrl); domain != "" {
-					domains = append(domains, domain)
+					domains = append(domains, strings.ToLower(domain))
 				}
 			}
 		}
@@ -273,7 +273,7 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 			is_ipv6
 		FROM member_events
 		WHERE member_name = ?
-		AND check_type IN ('site', '1')
+		AND LOWER(check_type) IN ('site', '1')
 		AND status = 0
 		AND (
 			(start_time < ? AND (end_time IS NULL OR end_time > ?))
@@ -352,7 +352,7 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 		return events
 	}
 
-	// Build parameterized query with proper placeholders
+	// Build parameterized query with proper placeholders (lower-cased to match LOWER() on column)
 	placeholders := make([]string, len(domains))
 	args := make([]interface{}, 0, len(domains)+5)
 	args = append(args, memberName)
@@ -377,7 +377,7 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 		FROM member_events
 		WHERE member_name = ?
 		AND status = 0
-		AND domain_name IN (%s)
+		AND LOWER(domain_name) IN (%s)
 		AND (
 			(start_time < ? AND (end_time IS NULL OR end_time > ?))
 			OR
