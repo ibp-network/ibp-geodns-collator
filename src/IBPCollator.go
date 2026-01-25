@@ -84,15 +84,20 @@ func migrateMemberEventCheckTypesToNumeric() error {
 		return nil
 	}
 
+	// First normalize to lowercase to handle binary collation inconsistencies.
+	if _, err := data2.DB.Exec(`UPDATE member_events SET check_type = LOWER(check_type)`); err != nil {
+		return err
+	}
+
 	res, err := data2.DB.Exec(`
 		UPDATE member_events
-		SET check_type = CASE check_type
+		SET check_type = CASE LOWER(check_type)
 			WHEN 'site' THEN '1'
 			WHEN 'domain' THEN '2'
 			WHEN 'endpoint' THEN '3'
 			ELSE check_type
 		END
-		WHERE check_type IN ('site','domain','endpoint')
+		WHERE LOWER(check_type) IN ('site','domain','endpoint')
 	`)
 	if err != nil {
 		return err

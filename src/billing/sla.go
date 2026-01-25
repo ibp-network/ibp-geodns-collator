@@ -2,6 +2,7 @@ package billing
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -225,7 +226,11 @@ func calculateServiceDowntime(memberName, serviceName string, domains []string, 
 			WHERE member_name = ?
 		AND LOWER(check_type) IN ('domain', '2', 'endpoint', '3')
 			AND status = 0
-			AND LOWER(domain_name) IN (%s)
+			AND (
+				LOWER(domain_name) IN (%s)
+				OR domain_name IS NULL
+				OR (domain_name = '' AND endpoint != '')
+			)
 			AND (
 				-- Event starts before period and ends during or after period
 				(start_time < ? AND (end_time IS NULL OR end_time > ?))
@@ -338,38 +343,92 @@ func extractDomainFromURL(rpcUrl string) string {
 	return strings.ToLower(url)
 }
 
+// extractHostFromEndpoint tries to derive a host from an endpoint string (URL or host:port).
+func extractHostFromEndpoint(endpoint string) string {
+	if endpoint == "" {
+		return ""
+	}
+	endpoint = strings.TrimSpace(endpoint)
+
+	// If it has a scheme, use url.Parse
+	if strings.Contains(endpoint, "://") {
+		if u, err := url.Parse(endpoint); err == nil && u.Host != "" {
+			host := u.Host
+			if strings.Contains(host, "@") {
+				parts := strings.SplitN(host, "@", 2)
+				host = parts[1]
+			}
+			if idx := strings.Index(host, ":"); idx != -1 {
+				host = host[:idx]
+			}
+			return strings.ToLower(host)
+		}
+	}
+
+	// Fallback: strip port if present
+	host := endpoint
+	if idx := strings.Index(host, "/"); idx != -1 {
+		host = host[:idx]
+	}
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	return strings.ToLower(host)
+}
+
 // mapDomainToService maps a domain name to a service name
-func mapDomainToService(domain, checkType string) string {
+func mapDomainToService(domain, checkType, endpoint string) string {
 	if checkType == "site" {
 		// Site-level checks don't map to a specific service
 		return ""
 	}
 
-	if domain == "" {
+	cleanDomain := strings.ToLower(strings.TrimSpace(domain))
+	c := cfg.GetConfig()
+
+	// If domain is empty, try deriving from endpoint host
+	if cleanDomain == "" && endpoint != "" {
+		cleanDomain = extractHostFromEndpoint(endpoint)
+	}
+	if cleanDomain == "" {
 		return ""
 	}
 
-	c := cfg.GetConfig()
+	exactMatches := []string{}
+	suffixMatches := []string{}
+
 	for svcName, svc := range c.Services {
 		for _, provider := range svc.Providers {
 			for _, rpcUrl := range provider.RpcUrls {
-				// Clean up the URL for comparison
-				cleanUrl := strings.ToLower(strings.TrimSpace(rpcUrl))
-				cleanDomain := strings.ToLower(strings.TrimSpace(domain))
-
-				// Check if the domain is contained in the RPC URL
-				if strings.Contains(cleanUrl, cleanDomain) {
-					return svcName
+				rpcHost := extractDomainFromURL(rpcUrl)
+				if rpcHost == "" {
+					continue
 				}
-
-				// Also check if the RPC URL contains the domain without protocol
-				if strings.Contains(cleanUrl, "://"+cleanDomain) ||
-					strings.Contains(cleanUrl, "://"+cleanDomain+":") ||
-					strings.Contains(cleanUrl, "://"+cleanDomain+"/") {
-					return svcName
+				if rpcHost == cleanDomain {
+					exactMatches = append(exactMatches, svcName)
+					break
+				}
+				if strings.HasSuffix(rpcHost, "."+cleanDomain) {
+					suffixMatches = append(suffixMatches, svcName)
+					break
 				}
 			}
 		}
+	}
+
+	// Prefer exact matches; if multiple, treat as ambiguous to avoid mis-attribution
+	if len(exactMatches) == 1 {
+		return exactMatches[0]
+	}
+	if len(exactMatches) > 1 {
+		return ""
+	}
+
+	if len(suffixMatches) == 1 {
+		return suffixMatches[0]
+	}
+	if len(suffixMatches) > 1 {
+		return ""
 	}
 
 	return ""

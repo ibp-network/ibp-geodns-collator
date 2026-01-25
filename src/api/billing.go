@@ -377,7 +377,11 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 		FROM member_events
 		WHERE member_name = ?
 		AND status = 0
-		AND LOWER(domain_name) IN (%s)
+		AND (
+			LOWER(domain_name) IN (%s)
+			OR domain_name IS NULL
+			OR (domain_name = '' AND endpoint != '')
+		)
 		AND (
 			(start_time < ? AND (end_time IS NULL OR end_time > ?))
 			OR

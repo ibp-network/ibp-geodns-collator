@@ -112,9 +112,9 @@ func handleDowntimeEvents(w http.ResponseWriter, r *http.Request) {
 		for range values {
 			placeholders = append(placeholders, "?")
 		}
-		query += " AND check_type IN (" + strings.Join(placeholders, ",") + ")"
+		query += " AND LOWER(check_type) IN (" + strings.Join(placeholders, ",") + ")"
 		for _, v := range values {
-			args = append(args, v)
+			args = append(args, strings.ToLower(v))
 		}
 	}
 
@@ -201,6 +201,12 @@ func handleDowntimeEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleCurrentDowntime(w http.ResponseWriter, r *http.Request) {
+	service := sanitizeString(r.URL.Query().Get("service"))
+	if service != "" && !validateIdentifier(service) {
+		writeError(w, http.StatusBadRequest, "Invalid service name")
+		return
+	}
+
 	query := `
 		SELECT 
 			id,
@@ -265,6 +271,17 @@ func handleCurrentDowntime(w http.ResponseWriter, r *http.Request) {
 
 		duration := time.Now().UTC().Sub(event.StartTime)
 		event.Duration = formatDuration(duration)
+
+		// Apply optional service filter; exclude site-level events when service is specified
+		if service != "" {
+			if event.DomainName == "" {
+				continue
+			}
+			serviceName := domainToServiceName(event.DomainName)
+			if !strings.EqualFold(serviceName, service) {
+				continue
+			}
+		}
 
 		events = append(events, event)
 	}
@@ -406,19 +423,14 @@ func mapDomainToService(domain, checkType string) string {
 	for svcName, svc := range c.Services {
 		for _, provider := range svc.Providers {
 			for _, rpcUrl := range provider.RpcUrls {
-				// Clean up the URL for comparison
-				cleanUrl := strings.ToLower(strings.TrimSpace(rpcUrl))
 				cleanDomain := strings.ToLower(strings.TrimSpace(domain))
 
-				// Check if the domain is contained in the RPC URL
-				if strings.Contains(cleanUrl, cleanDomain) {
-					return svcName
+				// Check if the RPC host equals or is a subdomain of the domain we saw
+				rpcHost := extractDomainFromURL(rpcUrl)
+				if rpcHost == "" {
+					continue
 				}
-
-				// Also check if the RPC URL contains the domain without protocol
-				if strings.Contains(cleanUrl, "://"+cleanDomain) ||
-					strings.Contains(cleanUrl, "://"+cleanDomain+":") ||
-					strings.Contains(cleanUrl, "://"+cleanDomain+"/") {
+				if rpcHost == cleanDomain || strings.HasSuffix(rpcHost, "."+cleanDomain) {
 					return svcName
 				}
 			}

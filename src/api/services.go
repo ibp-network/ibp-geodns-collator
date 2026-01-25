@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	billing "github.com/ibp-network/ibp-geodns-collator/src/billing"
 	cfg "github.com/ibp-network/ibp-geodns-libs/config"
 )
 
@@ -219,6 +220,13 @@ func handleServicesSummary(w http.ResponseWriter, r *http.Request) {
 }
 
 func buildServiceInfo(name string, service cfg.Service, config cfg.Config) ServiceInfo {
+	// Pull current billing summary to populate total cost for this service.
+	billingSummary := billing.GetSummary()
+	totalCost := 0.0
+	if svcCost, ok := billingSummary.Services[name]; ok {
+		totalCost = svcCost.Total
+	}
+
 	// Count members assigned to this service
 	memberCount := 0
 	for _, member := range config.Members {
@@ -249,9 +257,6 @@ func buildServiceInfo(name string, service cfg.Service, config cfg.Config) Servi
 	})
 
 	// Calculate total cost (simplified - you may want to use the billing calculation)
-	totalCost := 0.0
-	// This is a placeholder - integrate with your billing calculation
-
 	return ServiceInfo{
 		Name:          name,
 		DisplayName:   service.Configuration.DisplayName,

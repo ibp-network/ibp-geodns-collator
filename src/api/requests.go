@@ -120,10 +120,11 @@ func buildFilterConditions(filter RequestFilter, baseArgs []interface{}) (string
 	}
 
 	if len(filter.Domains) > 0 {
-		// de-duplicate domains to keep placeholder count minimal
+		// de-duplicate domains to keep placeholder count minimal (case-insensitive)
 		domainSet := make(map[string]struct{}, len(filter.Domains))
 		domainList := make([]string, 0, len(filter.Domains))
 		for _, domain := range filter.Domains {
+			domain = strings.ToLower(domain)
 			if _, seen := domainSet[domain]; seen {
 				continue
 			}
@@ -136,7 +137,7 @@ func buildFilterConditions(filter RequestFilter, baseArgs []interface{}) (string
 			placeholders[i] = "?"
 			args = append(args, domain)
 		}
-		conditions = append(conditions, fmt.Sprintf("domain_name IN (%s)", strings.Join(placeholders, ",")))
+		conditions = append(conditions, fmt.Sprintf("LOWER(domain_name) IN (%s)", strings.Join(placeholders, ",")))
 	}
 
 	whereClause := ""
@@ -486,38 +487,41 @@ func domainToServiceName(domain string) string {
 	cleanDomain := strings.TrimSuffix(domainLower, ".dotters.network")
 	cleanDomain = strings.TrimSuffix(cleanDomain, ".ibp.network")
 
+	exactMatches := []string{}
+	suffixMatches := []string{}
+
 	for serviceName, service := range c.Services {
 		serviceNameLower := strings.ToLower(serviceName)
 
 		// Check for exact match after cleaning
 		if cleanDomain == serviceNameLower {
-			return serviceName
+			exactMatches = append(exactMatches, serviceName)
 		}
 
-		// Check if any RPC URL contains this exact domain
+		// Check if any RPC URL host equals or ends with this domain
 		for _, provider := range service.Providers {
 			for _, rpcUrl := range provider.RpcUrls {
-				rpcUrlLower := strings.ToLower(rpcUrl)
-				if strings.Contains(rpcUrlLower, domainLower) {
-					return serviceName
+				rpcHost := strings.ToLower(extractDomainFromURL(rpcUrl))
+				if rpcHost == "" {
+					continue
+				}
+				if rpcHost == domainLower {
+					exactMatches = append(exactMatches, serviceName)
+					continue
+				}
+				if strings.HasSuffix(rpcHost, "."+domainLower) {
+					suffixMatches = append(suffixMatches, serviceName)
 				}
 			}
 		}
 	}
 
 	// Fallback: clean up the domain name for display
-	name := strings.TrimSuffix(domain, ".dotters.network")
-	name = strings.TrimSuffix(name, ".ibp.network")
-
-	// Don't replace hyphens in the middle of service names
-	// This prevents "eth-asset-hub-paseo" from becoming "Eth Asset Hub Paseo"
-	// Only capitalize first letter of each hyphenated part
-	parts := strings.Split(name, "-")
-	for i, part := range parts {
-		if len(part) > 0 {
-			parts[i] = strings.ToUpper(string(part[0])) + strings.ToLower(part[1:])
-		}
+	if len(exactMatches) == 1 {
+		return exactMatches[0]
 	}
-
-	return strings.Join(parts, "-")
+	if len(exactMatches) == 0 && len(suffixMatches) == 1 {
+		return suffixMatches[0]
+	}
+	return ""
 }

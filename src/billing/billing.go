@@ -5,6 +5,7 @@ package billing
 // ─────────────────────────────────────────────────────────────────────────────
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -54,6 +55,9 @@ var (
 	billingGenerationInProgress bool
 )
 
+// marker file to persist last generated month across restarts
+const billingMarkerFile = "billing_last_generated.marker"
+
 // GetSummary returns a deep-copy of the current billing snapshot.
 func GetSummary() Summary {
 	billingStore.RLock()
@@ -89,6 +93,8 @@ func GetSummary() Summary {
 func Init() {
 	// synchronous first refresh with verbose output
 	refresh(true)
+
+	loadLastGeneratedMonthMarker()
 
 	// hourly refresh (top of the hour, UTC)
 	go func() {
@@ -164,6 +170,7 @@ func refresh(verbose bool) {
 
 	newMemberCosts := make(map[string]MemberCost)
 	newServiceCosts := make(map[string]ServiceCost)
+	missingPricing := []string{}
 
 	// indices (case-insensitive)
 	svcByName := make(map[string]cfg.Service)
@@ -180,8 +187,14 @@ func refresh(verbose bool) {
 		regionKey := strings.ToLower(strings.TrimSpace(mem.Location.Region))
 		price, ok := priceByRegion[regionKey]
 		if !ok {
-			log.Log(log.Warn, "[billing] region %q has no pricing entry — member %s skipped", mem.Location.Region, memName)
-			continue
+			if def, okDef := priceByRegion["default"]; okDef {
+				price = def
+				log.Log(log.Warn, "[billing] region %q has no pricing entry — member %s falling back to default pricing", mem.Location.Region, memName)
+			} else {
+				log.Log(log.Error, "[billing] region %q has no pricing entry and no default — member %s skipped", mem.Location.Region, memName)
+				missingPricing = append(missingPricing, memName)
+				continue
+			}
 		}
 
 		// Skip members that are disabled or explicitly overridden
@@ -232,6 +245,12 @@ func refresh(verbose bool) {
 		}
 	}
 
+	// If any member is missing pricing (and no default), abort publish to avoid silent underbilling.
+	if len(missingPricing) > 0 {
+		log.Log(log.Error, "[billing] refresh aborted; missing pricing for members: %v", missingPricing)
+		return
+	}
+
 	// publish atomically
 	billingStore.Lock()
 	billingStore.Members = newMemberCosts
@@ -271,6 +290,16 @@ func generateMonthlyBillingPDF() {
 	now := time.Now().UTC()
 	previousMonth := now.AddDate(0, -1, 0)
 	billingMonth := time.Date(previousMonth.Year(), previousMonth.Month(), 1, 0, 0, 0, 0, time.UTC)
+
+	// Optional gate for multi-node deployments without shared storage
+	if os.Getenv("BILLING_GENERATOR_ENABLED") == "0" {
+		log.Log(log.Info, "[billing] BILLING_GENERATOR_ENABLED=0; skipping monthly billing generation")
+		return
+	}
+	if os.Getenv("BILLING_MULTI_NODE") == "1" && os.Getenv("BILLING_LOCK_SHARED_PATH") == "" {
+		log.Log(log.Warn, "[billing] BILLING_MULTI_NODE=1 but BILLING_LOCK_SHARED_PATH unset; skipping to avoid duplicate generation")
+		return
+	}
 
 	// Check if we've already generated for this month
 	billingGenMutex.Lock()
@@ -313,7 +342,40 @@ func generateMonthlyBillingPDF() {
 		return
 	}
 
+	// Acquire a simple lock file to avoid duplicate generation on shared storage.
+	lockBase := os.Getenv("BILLING_LOCK_SHARED_PATH")
+	if lockBase == "" {
+		lockBase = monthDir
+	}
+	lockFile := filepath.Join(lockBase, "billing.lock")
+	lockFd, err := os.OpenFile(lockFile, os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		// If lock exists, check staleness and retry once if stale.
+		if info, statErr := os.Stat(lockFile); statErr == nil {
+			if time.Since(info.ModTime()) > time.Minute {
+				log.Log(log.Warn, "[billing] stale lock detected for %s, removing", billingMonth.Format("January 2006"))
+				_ = os.Remove(lockFile)
+				lockFd, err = os.OpenFile(lockFile, os.O_CREATE|os.O_EXCL, 0644)
+			}
+		}
+	}
+	if err != nil {
+		log.Log(log.Info, "[billing] another node is generating PDFs for %s; skipping this run", billingMonth.Format("January 2006"))
+		return
+	}
+	lockFd.Close()
+	defer os.Remove(lockFile)
+
 	snap := GetSummary()
+
+	// If PDFs already exist for all members and overview, mark as generated and exit
+	if monthComplete(monthDir, billingMonth, &snap) {
+		log.Log(log.Info, "[billing] Monthly PDFs already complete for %s — marking done", billingMonth.Format("January 2006"))
+		if err := writeLastGeneratedMonthMarker(billingMonth); err != nil {
+			log.Log(log.Warn, "[billing] failed to write billing marker after detecting complete set: %v", err)
+		}
+		return
+	}
 
 	// Calculate SLA for the billing month
 	sla, err := CalculateSLAAdjustments(billingMonth, &snap)
@@ -362,6 +424,9 @@ func generateMonthlyBillingPDF() {
 	}
 
 	success = true
+	if err := writeLastGeneratedMonthMarker(billingMonth); err != nil {
+		log.Log(log.Warn, "[billing] failed to write billing marker: %v", err)
+	}
 	log.Log(log.Info, "[billing] Monthly billing generation completed for %s", billingMonth.Format("January 2006"))
 }
 
@@ -425,4 +490,51 @@ func logDetails(memCosts map[string]MemberCost, svcCosts map[string]ServiceCost)
 func resolveTempDir(conf interface{}) string {
 	c := cfg.GetConfig()
 	return filepath.Join(c.Local.System.WorkDir, "tmp")
+}
+
+// loadLastGeneratedMonthMarker restores lastGeneratedBillingMonth from marker file (best-effort).
+func loadLastGeneratedMonthMarker() {
+	tmpDir := resolveTempDir(nil)
+	if tmpDir == "" {
+		return
+	}
+	path := filepath.Join(tmpDir, billingMarkerFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	if t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(data))); err == nil {
+		billingGenMutex.Lock()
+		lastGeneratedBillingMonth = t
+		billingGenMutex.Unlock()
+	}
+}
+
+// writeLastGeneratedMonthMarker persists the last generated month to disk (best-effort).
+func writeLastGeneratedMonthMarker(month time.Time) error {
+	tmpDir := resolveTempDir(nil)
+	if tmpDir == "" {
+		return fmt.Errorf("tmp dir not configured")
+	}
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		return err
+	}
+	path := filepath.Join(tmpDir, billingMarkerFile)
+	return os.WriteFile(path, []byte(month.Format(time.RFC3339)), 0644)
+}
+
+// monthComplete checks whether overview and all member PDFs already exist.
+func monthComplete(monthDir string, month time.Time, snap *Summary) bool {
+	overviewName := fmt.Sprintf("%d_%02d-Monthly_Overview.pdf", month.Year(), int(month.Month()))
+	if _, err := os.Stat(filepath.Join(monthDir, overviewName)); err != nil {
+		return false
+	}
+	for memberName := range snap.Members {
+		memberNameSafe := strings.ReplaceAll(memberName, " ", "_")
+		memberFile := fmt.Sprintf("%d_%02d-IBP-Service_%s.pdf", month.Year(), int(month.Month()), memberNameSafe)
+		if _, err := os.Stat(filepath.Join(monthDir, memberFile)); err != nil {
+			return false
+		}
+	}
+	return true
 }
