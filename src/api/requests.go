@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	common "github.com/ibp-network/ibp-geodns-collator/src/common"
 	cfg "github.com/ibp-network/ibp-geodns-libs/config"
 	data2 "github.com/ibp-network/ibp-geodns-libs/data2"
 	log "github.com/ibp-network/ibp-geodns-libs/logging"
@@ -536,6 +537,10 @@ func convertServicesToDomains(services []string) []string {
 	}
 
 	return domains
+}
+
+func extractDomainFromURL(rpcURL string) string {
+	return common.NormalizeDomainLabel(rpcURL)
 }
 
 // Helper function to convert domain to service name with improved matching

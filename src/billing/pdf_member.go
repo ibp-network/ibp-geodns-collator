@@ -663,19 +663,7 @@ func getServiceDowntimeEvents(memberName, serviceName string, month time.Time) [
 		return events
 	}
 
-	// Map service to domains
 	c := cfg.GetConfig()
-	domains := []string{}
-	if svc, exists := c.Services[serviceName]; exists {
-		for _, provider := range svc.Providers {
-			for _, rpcUrl := range provider.RpcUrls {
-				if domain := extractDomainFromURL(rpcUrl); domain != "" {
-					domains = append(domains, domain)
-				}
-			}
-		}
-	}
-	domains = common.NormalizeHosts(domains)
 
 	startTime := month
 	endTime := month.AddDate(0, 1, 0).Add(-time.Nanosecond)
@@ -752,7 +740,7 @@ func getServiceDowntimeEvents(memberName, serviceName string, month time.Time) [
 	}
 
 	// Then get service-specific events
-	if len(domains) > 0 {
+	if _, exists := c.Services[serviceName]; exists {
 		query := `
 			SELECT  
 				check_type,
@@ -801,7 +789,7 @@ func getServiceDowntimeEvents(memberName, serviceName string, month time.Time) [
 				log.Log(log.Error, "[billing] Failed to scan downtime event: %v", err)
 				continue
 			}
-			if !common.EventMatchesService(event.DomainName, event.Endpoint, domains) {
+			if !common.EventMatchesService(c.Services, serviceName, event.DomainName, event.Endpoint) {
 				continue
 			}
 
@@ -947,16 +935,9 @@ func getServiceFromEvent(event DowntimeEvent) string {
 		return "All Services"
 	}
 
-	// Map domain to service
 	c := cfg.GetConfig()
-	for svcName, svc := range c.Services {
-		for _, provider := range svc.Providers {
-			for _, rpcUrl := range provider.RpcUrls {
-				if strings.Contains(rpcUrl, event.DomainName) {
-					return svcName
-				}
-			}
-		}
+	if svcName := common.MapServiceNameByEvent(c.Services, event.DomainName, event.Endpoint); svcName != "" {
+		return svcName
 	}
 
 	return event.DomainName

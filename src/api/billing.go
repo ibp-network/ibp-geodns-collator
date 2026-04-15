@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	billing "github.com/ibp-network/ibp-geodns-collator/src/billing"
@@ -255,19 +254,7 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 		return events
 	}
 
-	// Map service to domains
 	c := cfg.GetConfig()
-	domains := []string{}
-	if svc, exists := c.Services[serviceName]; exists {
-		for _, provider := range svc.Providers {
-			for _, rpcUrl := range provider.RpcUrls {
-				if domain := extractDomainFromURL(rpcUrl); domain != "" {
-					domains = append(domains, strings.ToLower(domain))
-				}
-			}
-		}
-	}
-	domains = common.NormalizeHosts(domains)
 
 	startTime := month
 	endTime := month.AddDate(0, 1, 0).Add(-time.Nanosecond)
@@ -364,7 +351,7 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 	}
 
 	// Then get service-specific events
-	if len(domains) == 0 {
+	if _, exists := c.Services[serviceName]; !exists {
 		return events
 	}
 
@@ -418,18 +405,18 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 			log.Log(log.Error, "[CollatorAPI] Failed to scan downtime event: %v", err)
 			continue
 		}
-		if !common.EventMatchesService(event.DomainName, event.Endpoint, domains) {
-			continue
-		}
-
-		event.MemberName = memberName
-		event.CheckType = common.NormalizeCheckType(event.CheckType)
 		if domainName.Valid {
 			event.DomainName = domainName.String
 		}
 		if endpoint.Valid {
 			event.Endpoint = endpoint.String
 		}
+		if !common.EventMatchesService(c.Services, serviceName, event.DomainName, event.Endpoint) {
+			continue
+		}
+
+		event.MemberName = memberName
+		event.CheckType = common.NormalizeCheckType(event.CheckType)
 		if errorText.Valid {
 			event.Error = errorText.String
 		}
@@ -462,8 +449,4 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 	}
 
 	return events
-}
-
-func extractDomainFromURL(rpcUrl string) string {
-	return common.ExtractHost(rpcUrl)
 }

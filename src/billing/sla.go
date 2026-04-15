@@ -2,7 +2,6 @@ package billing
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	common "github.com/ibp-network/ibp-geodns-collator/src/common"
@@ -64,21 +63,13 @@ func CalculateSLAAdjustments(month time.Time, sum *Summary) (SLASummary, error) 
 		}
 	}
 
-	// Build service to domains mapping (active services only)
-	serviceToDomains := make(map[string][]string)
+	// Build the active service set used for SLA attribution.
+	activeServices := make(map[string]cfg.Service)
 	for svcName, svc := range c.Services {
 		if svc.Configuration.Active != 1 {
 			continue
 		}
-		domains := []string{}
-		for _, provider := range svc.Providers {
-			for _, rpcUrl := range provider.RpcUrls {
-				if domain := extractDomainFromURL(rpcUrl); domain != "" {
-					domains = append(domains, domain)
-				}
-			}
-		}
-		serviceToDomains[svcName] = common.NormalizeHosts(domains)
+		activeServices[svcName] = svc
 	}
 
 	// Calculate downtime for each member/service combination
@@ -96,7 +87,7 @@ func CalculateSLAAdjustments(month time.Time, sum *Summary) (SLASummary, error) 
 			}
 
 			// Calculate downtime for this specific service
-			downtime := calculateServiceDowntime(dbMemberName, svcKey, serviceToDomains[svcKey], startTime, endTime)
+			downtime := calculateServiceDowntime(dbMemberName, svcKey, activeServices, startTime, endTime)
 
 			// Calculate uptime
 			uptime := totalHours - downtime
@@ -132,8 +123,11 @@ func CalculateSLAAdjustments(month time.Time, sum *Summary) (SLASummary, error) 
 }
 
 // calculateServiceDowntime calculates total downtime hours for a specific service
-func calculateServiceDowntime(memberName, serviceName string, domains []string, startTime, endTime time.Time) float64 {
+func calculateServiceDowntime(memberName, serviceName string, services map[string]cfg.Service, startTime, endTime time.Time) float64 {
 	if data2.DB == nil {
+		return 0
+	}
+	if _, exists := services[serviceName]; !exists {
 		return 0
 	}
 
@@ -190,8 +184,8 @@ func calculateServiceDowntime(memberName, serviceName string, domains []string, 
 		}
 	}
 
-	// Query for domain/endpoint checks specific to this service
-	if len(domains) > 0 {
+	// Query for domain/endpoint checks specific to this service.
+	if len(services) > 0 {
 		serviceQuery := `
 			SELECT  
 				check_type,
@@ -228,7 +222,7 @@ func calculateServiceDowntime(memberName, serviceName string, domains []string, 
 					log.Log(log.Error, "[SLA] Failed to scan service event: %v", err)
 					continue
 				}
-				if !common.EventMatchesService(domainName, endpoint, domains) {
+				if !common.EventMatchesService(services, serviceName, domainName, endpoint) {
 					continue
 				}
 
@@ -301,69 +295,5 @@ func mergeOverlappingPeriods(periods []downtimePeriod) []downtimePeriod {
 }
 
 // extractDomainFromURL extracts the domain from an RPC URL
-func extractDomainFromURL(rpcUrl string) string {
-	return common.ExtractHost(rpcUrl)
-}
-
-// extractHostFromEndpoint tries to derive a host from an endpoint string (URL or host:port).
-func extractHostFromEndpoint(endpoint string) string {
-	return common.ExtractHost(endpoint)
-}
 
 // mapDomainToService maps a domain name to a service name
-func mapDomainToService(domain, checkType, endpoint string) string {
-	if checkType == "site" {
-		// Site-level checks don't map to a specific service
-		return ""
-	}
-
-	cleanDomain := common.ExtractHost(domain)
-	c := cfg.GetConfig()
-
-	// If domain is empty, try deriving from endpoint host
-	if cleanDomain == "" && endpoint != "" {
-		cleanDomain = common.ExtractHost(endpoint)
-	}
-	if cleanDomain == "" {
-		return ""
-	}
-
-	exactMatches := []string{}
-	suffixMatches := []string{}
-
-	for svcName, svc := range c.Services {
-		for _, provider := range svc.Providers {
-			for _, rpcUrl := range provider.RpcUrls {
-				rpcHost := extractDomainFromURL(rpcUrl)
-				if rpcHost == "" {
-					continue
-				}
-				if rpcHost == cleanDomain {
-					exactMatches = append(exactMatches, svcName)
-					break
-				}
-				if strings.HasSuffix(rpcHost, "."+cleanDomain) {
-					suffixMatches = append(suffixMatches, svcName)
-					break
-				}
-			}
-		}
-	}
-
-	// Prefer exact matches; if multiple, treat as ambiguous to avoid mis-attribution
-	if len(exactMatches) == 1 {
-		return exactMatches[0]
-	}
-	if len(exactMatches) > 1 {
-		return ""
-	}
-
-	if len(suffixMatches) == 1 {
-		return suffixMatches[0]
-	}
-	if len(suffixMatches) > 1 {
-		return ""
-	}
-
-	return ""
-}

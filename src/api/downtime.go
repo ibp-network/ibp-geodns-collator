@@ -189,10 +189,10 @@ func handleDowntimeEvents(w http.ResponseWriter, r *http.Request) {
 
 		// Filter by service if specified. Site-level events (no domain) are excluded when a service filter is applied.
 		if service != "" {
-			if event.DomainName == "" {
+			if event.DomainName == "" && event.Endpoint == "" {
 				continue
 			}
-			serviceName := domainToServiceName(event.DomainName)
+			serviceName := common.MapServiceNameByEvent(cfg.GetConfig().Services, event.DomainName, event.Endpoint)
 			if !strings.EqualFold(serviceName, service) {
 				continue
 			}
@@ -287,10 +287,10 @@ func handleCurrentDowntime(w http.ResponseWriter, r *http.Request) {
 
 		// Apply optional service filter; exclude site-level events when service is specified
 		if service != "" {
-			if event.DomainName == "" {
+			if event.DomainName == "" && event.Endpoint == "" {
 				continue
 			}
-			serviceName := domainToServiceName(event.DomainName)
+			serviceName := common.MapServiceNameByEvent(cfg.GetConfig().Services, event.DomainName, event.Endpoint)
 			if !strings.EqualFold(serviceName, service) {
 				continue
 			}
@@ -458,38 +458,4 @@ const DefaultSLAPercentage = billing.DefaultSLAPercentage
 // CalculateSLAAdjustments delegates to the billing subsystem to keep a single source of truth.
 func CalculateSLAAdjustments(month time.Time, sum *billing.Summary) (SLASummary, error) {
 	return billing.CalculateSLAAdjustments(month, sum)
-}
-
-// mapDomainToService maps a domain name to a service name
-func mapDomainToService(domain, checkType string) string {
-	if checkType == "site" {
-		// Site-level checks don't map to a specific service
-		return ""
-	}
-
-	if domain == "" {
-		return ""
-	}
-
-	c := cfg.GetConfig()
-	for svcName, svc := range c.Services {
-		for _, provider := range svc.Providers {
-			for _, rpcUrl := range provider.RpcUrls {
-				cleanDomain := strings.ToLower(strings.TrimSpace(domain))
-
-				// Check if the RPC host equals or is a subdomain of the domain we saw
-				rpcHost := extractDomainFromURL(rpcUrl)
-				if rpcHost == "" {
-					continue
-				}
-				if rpcHost == cleanDomain || strings.HasSuffix(rpcHost, "."+cleanDomain) {
-					return svcName
-				}
-			}
-		}
-	}
-
-	// If no match found, log it for debugging
-	log.Log(log.Debug, "[SLA] Could not map domain '%s' to any service", domain)
-	return ""
 }

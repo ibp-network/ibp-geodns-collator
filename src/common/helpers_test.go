@@ -1,6 +1,10 @@
 package common
 
-import "testing"
+import (
+	"testing"
+
+	cfg "github.com/ibp-network/ibp-geodns-libs/config"
+)
 
 func TestNormalizeCheckType(t *testing.T) {
 	tests := map[string]string{
@@ -46,36 +50,52 @@ func TestExpandCheckTypeValues(t *testing.T) {
 	}
 }
 
-func TestEventMatchesService(t *testing.T) {
-	serviceHosts := NormalizeHosts([]string{
-		"wss://polkadot.dotters.network/public",
-		"https://rpc.ibp.network",
-	})
-
-	tests := []struct {
-		name      string
-		domain    string
-		endpoint  string
-		wantMatch bool
-	}{
-		{name: "exact domain", domain: "polkadot.dotters.network", wantMatch: true},
-		{name: "endpoint url host", endpoint: "wss://rpc.ibp.network/ws", wantMatch: true},
-		{name: "subdomain host", endpoint: "node1.polkadot.dotters.network:9944", wantMatch: true},
-		{name: "broad parent domain does not match", domain: "dotters.network", wantMatch: false},
-		{name: "different host", endpoint: "https://example.com", wantMatch: false},
-	}
-
-	for _, test := range tests {
-		if got := EventMatchesService(test.domain, test.endpoint, serviceHosts); got != test.wantMatch {
-			t.Fatalf("%s: EventMatchesService(%q, %q) = %v, want %v", test.name, test.domain, test.endpoint, got, test.wantMatch)
-		}
-	}
-}
-
 func TestSanitizeFilename(t *testing.T) {
 	input := `Alice/Bob: Validator?`
 	want := "Alice_Bob__Validator_"
 	if got := SanitizeFilename(input); got != want {
 		t.Fatalf("SanitizeFilename(%q) = %q, want %q", input, got, want)
+	}
+}
+
+func TestMapServiceNameByEventPrefersExactEndpointPath(t *testing.T) {
+	services := map[string]cfg.Service{
+		"Polkadot": {
+			Providers: map[string]cfg.ServiceProvider{
+				"ibp": {RpcUrls: []string{"wss://rpc.ibp.network/polkadot"}},
+			},
+		},
+		"Kusama": {
+			Providers: map[string]cfg.ServiceProvider{
+				"ibp": {RpcUrls: []string{"wss://rpc.ibp.network/kusama"}},
+			},
+		},
+	}
+
+	if got := MapServiceNameByEvent(services, "rpc.ibp.network", "wss://rpc.ibp.network/polkadot"); got != "Polkadot" {
+		t.Fatalf("MapServiceNameByEvent exact endpoint = %q, want %q", got, "Polkadot")
+	}
+	if got := MapServiceNameByEvent(services, "rpc.ibp.network", "wss://rpc.ibp.network/kusama"); got != "Kusama" {
+		t.Fatalf("MapServiceNameByEvent exact endpoint = %q, want %q", got, "Kusama")
+	}
+	if got := MapServiceNameByEvent(services, "rpc.ibp.network", ""); got != "" {
+		t.Fatalf("MapServiceNameByEvent ambiguous domain = %q, want empty", got)
+	}
+}
+
+func TestEventMatchesServiceUsesUniqueMapping(t *testing.T) {
+	services := map[string]cfg.Service{
+		"BridgeHub": {
+			Providers: map[string]cfg.ServiceProvider{
+				"dotters": {RpcUrls: []string{"wss://bridge-hub-polkadot.dotters.network"}},
+			},
+		},
+	}
+
+	if !EventMatchesService(services, "BridgeHub", "bridge-hub-polkadot.dotters.network", "") {
+		t.Fatal("expected exact domain label to match BridgeHub")
+	}
+	if EventMatchesService(services, "BridgeHub", "people-polkadot.dotters.network", "") {
+		t.Fatal("unexpected match for unrelated domain label")
 	}
 }
