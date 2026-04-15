@@ -31,9 +31,13 @@ type DowntimeEvent struct {
 }
 
 func handleDowntimeEvents(w http.ResponseWriter, r *http.Request) {
+	if !requireDatabase(w) {
+		return
+	}
+
 	start, end, err := parseTimeParams(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid date format")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -196,11 +200,20 @@ func handleDowntimeEvents(w http.ResponseWriter, r *http.Request) {
 
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		log.Log(log.Error, "[CollatorAPI] Downtime event row iteration failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, events)
 }
 
 func handleCurrentDowntime(w http.ResponseWriter, r *http.Request) {
+	if !requireDatabase(w) {
+		return
+	}
+
 	service := sanitizeString(r.URL.Query().Get("service"))
 	if service != "" && !validateIdentifier(service) {
 		writeError(w, http.StatusBadRequest, "Invalid service name")
@@ -285,20 +298,30 @@ func handleCurrentDowntime(w http.ResponseWriter, r *http.Request) {
 
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		log.Log(log.Error, "[CollatorAPI] Current downtime row iteration failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, events)
 }
 
 func handleDowntimeSummary(w http.ResponseWriter, r *http.Request) {
+	if !requireDatabase(w) {
+		return
+	}
+
 	start, end, err := parseTimeParams(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid date format")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	// Get total downtime events
 	var totalEvents, ongoingEvents, resolvedEvents int
 	var totalDowntimeMinutes float64
+	var resolvedDowntimeMinutes float64
 
 	// Total events
 	err = data2.DB.QueryRow(`
@@ -310,6 +333,8 @@ func handleDowntimeSummary(w http.ResponseWriter, r *http.Request) {
 	`, end, start).Scan(&totalEvents)
 	if err != nil {
 		log.Log(log.Error, "[CollatorAPI] Failed to get total events: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	// Ongoing events
@@ -322,6 +347,8 @@ func handleDowntimeSummary(w http.ResponseWriter, r *http.Request) {
 	`, end).Scan(&ongoingEvents)
 	if err != nil {
 		log.Log(log.Error, "[CollatorAPI] Failed to get ongoing events: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	resolvedEvents = totalEvents - ongoingEvents
@@ -330,55 +357,73 @@ func handleDowntimeSummary(w http.ResponseWriter, r *http.Request) {
 	rows, err := data2.DB.Query(`
 		SELECT 
 			start_time,
-			COALESCE(end_time, ?) as end_time
+			end_time
 		FROM member_events
 		WHERE status = 0
 		AND start_time <= ?
 		AND (end_time IS NULL OR end_time >= ?)
-	`, time.Now().UTC(), end, start)
+	`, end, start)
 
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
-			var eventStart, eventEnd time.Time
-			rows.Scan(&eventStart, &eventEnd)
+			var eventStart time.Time
+			var eventEnd sql.NullTime
+			if err := rows.Scan(&eventStart, &eventEnd); err != nil {
+				log.Log(log.Error, "[CollatorAPI] Failed to scan downtime summary row: %v", err)
+				continue
+			}
 
 			// Adjust to date range
 			if eventStart.Before(start) {
 				eventStart = start
 			}
-			if eventEnd.After(end) {
-				eventEnd = end
+			actualEnd := end
+			if eventEnd.Valid && eventEnd.Time.Before(end) {
+				actualEnd = eventEnd.Time
 			}
 
-			totalDowntimeMinutes += eventEnd.Sub(eventStart).Minutes()
+			durationMinutes := actualEnd.Sub(eventStart).Minutes()
+			totalDowntimeMinutes += durationMinutes
+			if eventEnd.Valid {
+				resolvedDowntimeMinutes += durationMinutes
+			}
 		}
+		if err := rows.Err(); err != nil {
+			log.Log(log.Error, "[CollatorAPI] Downtime summary row iteration failed: %v", err)
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+	} else {
+		log.Log(log.Error, "[CollatorAPI] Failed to query downtime summary rows: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	// Get affected members count
 	var affectedMembers int
-	data2.DB.QueryRow(`
+	err = data2.DB.QueryRow(`
 		SELECT COUNT(DISTINCT member_name) 
 		FROM member_events 
 		WHERE status = 0
 		AND start_time <= ?
 		AND (end_time IS NULL OR end_time >= ?)
 	`, end, start).Scan(&affectedMembers)
+	if err != nil {
+		log.Log(log.Error, "[CollatorAPI] Failed to get affected members: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 
 	summary := map[string]interface{}{
-		"start_date":           start.Format("2006-01-02"),
-		"end_date":             end.Format("2006-01-02"),
-		"total_events":         totalEvents,
-		"ongoing_events":       ongoingEvents,
-		"resolved_events":      resolvedEvents,
-		"affected_members":     affectedMembers,
-		"total_downtime_hours": totalDowntimeMinutes / 60,
-		"average_downtime_hours": func() float64 {
-			if resolvedEvents > 0 {
-				return (totalDowntimeMinutes / 60) / float64(resolvedEvents)
-			}
-			return 0
-		}(),
+		"start_date":             start.Format("2006-01-02"),
+		"end_date":               end.Format("2006-01-02"),
+		"total_events":           totalEvents,
+		"ongoing_events":         ongoingEvents,
+		"resolved_events":        resolvedEvents,
+		"affected_members":       affectedMembers,
+		"total_downtime_hours":   totalDowntimeMinutes / 60,
+		"average_downtime_hours": averageResolvedDowntimeHours(resolvedDowntimeMinutes, resolvedEvents),
 	}
 
 	writeJSON(w, http.StatusOK, summary)
@@ -395,6 +440,13 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dh %dm", hours, minutes)
 	}
 	return fmt.Sprintf("%dm", minutes)
+}
+
+func averageResolvedDowntimeHours(resolvedDowntimeMinutes float64, resolvedEvents int) float64 {
+	if resolvedEvents <= 0 {
+		return 0
+	}
+	return (resolvedDowntimeMinutes / 60) / float64(resolvedEvents)
 }
 
 // Align SLA types with the billing package to avoid divergent implementations.

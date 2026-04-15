@@ -250,7 +250,7 @@ func writeMonthlyOverviewPDF(sum *Summary, sla SLASummary, outDir string, month 
 	pdf.CellFormat(cardWidth-4, 6, "Total Base Cost", "", 1, "C", false, 0, "")
 	pdf.SetFont("Helvetica", "B", 18)
 	pdf.SetXY(startX+2, y+15)
-	pdf.CellFormat(cardWidth-4, 10, fmt.Sprintf("$%s", formatNumber(int(grandTotalBase))), "", 0, "C", false, 0, "")
+	pdf.CellFormat(cardWidth-4, 10, formatMoney(grandTotalBase), "", 0, "C", false, 0, "")
 	pdf.SetFont("Helvetica", "", 9)
 	pdf.SetXY(startX+2, y+28)
 	pdf.CellFormat(cardWidth-4, 5, "Before SLA adjustments", "", 0, "C", false, 0, "")
@@ -262,23 +262,27 @@ func writeMonthlyOverviewPDF(sum *Summary, sla SLASummary, outDir string, month 
 	pdf.CellFormat(cardWidth-4, 6, "Total Billed", "", 1, "C", false, 0, "")
 	pdf.SetFont("Helvetica", "B", 18)
 	pdf.SetXY(startX+cardWidth+spacing+2, y+15)
-	pdf.CellFormat(cardWidth-4, 10, fmt.Sprintf("$%s", formatNumber(int(grandTotalBilled))), "", 0, "C", false, 0, "")
+	pdf.CellFormat(cardWidth-4, 10, formatMoney(grandTotalBilled), "", 0, "C", false, 0, "")
 	pdf.SetFont("Helvetica", "", 9)
 	pdf.SetXY(startX+cardWidth+spacing+2, y+28)
 	pdf.CellFormat(cardWidth-4, 5, "After SLA credits", "", 0, "C", false, 0, "")
 
 	// SLA Credits Card
 	savings := grandTotalBase - grandTotalBilled
+	savingsLabel := "0.0% savings"
+	if grandTotalBase > 0 {
+		savingsLabel = fmt.Sprintf("%.1f%% savings", (savings/grandTotalBase)*100)
+	}
 	drawGradientCard(pdf, startX+2*(cardWidth+spacing), y, cardWidth, cardHeight, 46, 125, 50)
 	pdf.SetFont("Helvetica", "", 11)
 	pdf.SetXY(startX+2*(cardWidth+spacing)+2, y+5)
 	pdf.CellFormat(cardWidth-4, 6, "SLA Credits", "", 1, "C", false, 0, "")
 	pdf.SetFont("Helvetica", "B", 18)
 	pdf.SetXY(startX+2*(cardWidth+spacing)+2, y+15)
-	pdf.CellFormat(cardWidth-4, 10, fmt.Sprintf("$%s", formatNumber(int(savings))), "", 0, "C", false, 0, "")
+	pdf.CellFormat(cardWidth-4, 10, formatMoney(savings), "", 0, "C", false, 0, "")
 	pdf.SetFont("Helvetica", "", 9)
 	pdf.SetXY(startX+2*(cardWidth+spacing)+2, y+28)
-	pdf.CellFormat(cardWidth-4, 5, fmt.Sprintf("%.1f%% savings", (savings/grandTotalBase)*100), "", 0, "C", false, 0, "")
+	pdf.CellFormat(cardWidth-4, 5, savingsLabel, "", 0, "C", false, 0, "")
 	pdf.SetTextColor(0, 0, 0)
 
 	// ===== PAGE 2: SERVICE HEALTH =====
@@ -993,6 +997,10 @@ func formatNumber(n int) string {
 		return fmt.Sprintf("%.1fK", float64(n)/1000)
 	}
 	return fmt.Sprintf("%.1fM", float64(n)/1000000)
+}
+
+func formatMoney(amount float64) string {
+	return fmt.Sprintf("$%.2f", amount)
 }
 
 // calculateTotalRequests gets the total requests for the month

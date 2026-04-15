@@ -2,10 +2,10 @@ package billing
 
 import (
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
+	common "github.com/ibp-network/ibp-geodns-collator/src/common"
 	cfg "github.com/ibp-network/ibp-geodns-libs/config"
 	data2 "github.com/ibp-network/ibp-geodns-libs/data2"
 	log "github.com/ibp-network/ibp-geodns-libs/logging"
@@ -78,7 +78,7 @@ func CalculateSLAAdjustments(month time.Time, sum *Summary) (SLASummary, error) 
 				}
 			}
 		}
-		serviceToDomains[svcName] = domains
+		serviceToDomains[svcName] = common.NormalizeHosts(domains)
 	}
 
 	// Calculate downtime for each member/service combination
@@ -164,7 +164,6 @@ func calculateServiceDowntime(memberName, serviceName string, domains []string, 
 		log.Log(log.Error, "[SLA] Failed to query site downtime: %v", err)
 	} else {
 		defer rows.Close()
-		siteCount := 0
 		for rows.Next() {
 			var eventStart time.Time
 			var eventEnd *time.Time
@@ -185,37 +184,15 @@ func calculateServiceDowntime(memberName, serviceName string, domains []string, 
 			}
 
 			allPeriods = append(allPeriods, downtimePeriod{start: eventStart, end: actualEnd})
-			siteCount++
+		}
+		if err := rows.Err(); err != nil {
+			log.Log(log.Error, "[SLA] Site downtime row iteration failed: %v", err)
 		}
 	}
 
 	// Query for domain/endpoint checks specific to this service
 	if len(domains) > 0 {
-		// normalize and de-duplicate domains to align with LOWER(...) matching on a binary column
-		domainSet := make(map[string]struct{}, len(domains))
-		lowerDomains := make([]string, 0, len(domains))
-		for _, d := range domains {
-			ld := strings.ToLower(d)
-			if _, exists := domainSet[ld]; exists {
-				continue
-			}
-			domainSet[ld] = struct{}{}
-			lowerDomains = append(lowerDomains, ld)
-		}
-
-		// Build parameterized query
-		placeholders := make([]string, len(lowerDomains))
-		args := make([]interface{}, 0, len(lowerDomains)+5)
-		args = append(args, memberName)
-
-		for i, domain := range lowerDomains {
-			placeholders[i] = "?"
-			args = append(args, domain)
-		}
-
-		args = append(args, endTime, startTime, startTime, endTime)
-
-		serviceQuery := fmt.Sprintf(`
+		serviceQuery := `
 			SELECT  
 				check_type,
 				domain_name,
@@ -224,13 +201,8 @@ func calculateServiceDowntime(memberName, serviceName string, domains []string, 
 				end_time
 			FROM member_events
 			WHERE member_name = ?
-		AND LOWER(check_type) IN ('domain', '2', 'endpoint', '3')
+			AND LOWER(check_type) IN ('domain', '2', 'endpoint', '3')
 			AND status = 0
-			AND (
-				LOWER(domain_name) IN (%s)
-				OR domain_name IS NULL
-				OR (domain_name = '' AND endpoint != '')
-			)
 			AND (
 				-- Event starts before period and ends during or after period
 				(start_time < ? AND (end_time IS NULL OR end_time > ?))
@@ -238,14 +210,13 @@ func calculateServiceDowntime(memberName, serviceName string, domains []string, 
 				-- Event starts during period
 				(start_time >= ? AND start_time < ?)
 			)
-		`, strings.Join(placeholders, ","))
+		`
 
-		rows, err := data2.DB.Query(serviceQuery, args...)
+		rows, err := data2.DB.Query(serviceQuery, memberName, endTime, startTime, startTime, endTime)
 		if err != nil {
 			log.Log(log.Error, "[SLA] Failed to query service downtime: %v", err)
 		} else {
 			defer rows.Close()
-			serviceCount := 0
 
 			for rows.Next() {
 				var checkType string
@@ -255,6 +226,9 @@ func calculateServiceDowntime(memberName, serviceName string, domains []string, 
 
 				if err := rows.Scan(&checkType, &domainName, &endpoint, &eventStart, &eventEnd); err != nil {
 					log.Log(log.Error, "[SLA] Failed to scan service event: %v", err)
+					continue
+				}
+				if !common.EventMatchesService(domainName, endpoint, domains) {
 					continue
 				}
 
@@ -269,7 +243,9 @@ func calculateServiceDowntime(memberName, serviceName string, domains []string, 
 				}
 
 				allPeriods = append(allPeriods, downtimePeriod{start: eventStart, end: actualEnd})
-				serviceCount++
+			}
+			if err := rows.Err(); err != nil {
+				log.Log(log.Error, "[SLA] Service downtime row iteration failed: %v", err)
 			}
 		}
 	}
@@ -326,54 +302,12 @@ func mergeOverlappingPeriods(periods []downtimePeriod) []downtimePeriod {
 
 // extractDomainFromURL extracts the domain from an RPC URL
 func extractDomainFromURL(rpcUrl string) string {
-	// Remove protocol
-	url := strings.TrimPrefix(rpcUrl, "wss://")
-	url = strings.TrimPrefix(url, "ws://")
-	url = strings.TrimPrefix(url, "https://")
-	url = strings.TrimPrefix(url, "http://")
-
-	// Remove path and port
-	if idx := strings.Index(url, "/"); idx != -1 {
-		url = url[:idx]
-	}
-	if idx := strings.Index(url, ":"); idx != -1 {
-		url = url[:idx]
-	}
-
-	return strings.ToLower(url)
+	return common.ExtractHost(rpcUrl)
 }
 
 // extractHostFromEndpoint tries to derive a host from an endpoint string (URL or host:port).
 func extractHostFromEndpoint(endpoint string) string {
-	if endpoint == "" {
-		return ""
-	}
-	endpoint = strings.TrimSpace(endpoint)
-
-	// If it has a scheme, use url.Parse
-	if strings.Contains(endpoint, "://") {
-		if u, err := url.Parse(endpoint); err == nil && u.Host != "" {
-			host := u.Host
-			if strings.Contains(host, "@") {
-				parts := strings.SplitN(host, "@", 2)
-				host = parts[1]
-			}
-			if idx := strings.Index(host, ":"); idx != -1 {
-				host = host[:idx]
-			}
-			return strings.ToLower(host)
-		}
-	}
-
-	// Fallback: strip port if present
-	host := endpoint
-	if idx := strings.Index(host, "/"); idx != -1 {
-		host = host[:idx]
-	}
-	if idx := strings.Index(host, ":"); idx != -1 {
-		host = host[:idx]
-	}
-	return strings.ToLower(host)
+	return common.ExtractHost(endpoint)
 }
 
 // mapDomainToService maps a domain name to a service name
@@ -383,12 +317,12 @@ func mapDomainToService(domain, checkType, endpoint string) string {
 		return ""
 	}
 
-	cleanDomain := strings.ToLower(strings.TrimSpace(domain))
+	cleanDomain := common.ExtractHost(domain)
 	c := cfg.GetConfig()
 
 	// If domain is empty, try deriving from endpoint host
 	if cleanDomain == "" && endpoint != "" {
-		cleanDomain = extractHostFromEndpoint(endpoint)
+		cleanDomain = common.ExtractHost(endpoint)
 	}
 	if cleanDomain == "" {
 		return ""

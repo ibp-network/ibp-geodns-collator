@@ -1,5 +1,5 @@
 [Unit]
-Description=IBP GeoDNS – Monitoring Agent
+Description=IBP GeoDNS Collator
 After=network-online.target
 Wants=network-online.target
 
@@ -9,15 +9,12 @@ User=ibp
 Group=ibp
 WorkingDirectory=/opt/ibp-geodns-collator
 
-AmbientCapabilities=CAP_NET_RAW
-CapabilityBoundingSet=CAP_NET_RAW
-
-ExecStart=/opt/ibp-geodns-collator/bin/ibp-collator --config /etc/ibpdns/collator.json
+ExecStart=/opt/ibp-geodns-collator/bin/ibp-collator --config /etc/ibpdns/ibpcollator.json
 Restart=on-failure
 RestartSec=5s
 
-Environment="SSL_CERT=/etc/letsencrypt/live/ibdash.dotters.network/fullchain.pem"
-Environment="SSL_KEY=/etc/letsencrypt/live/ibdash.dotters.network/privkey.pem"
+Environment="SSL_CERT=/etc/letsencrypt/live/collator.example.org/fullchain.pem"
+Environment="SSL_KEY=/etc/letsencrypt/live/collator.example.org/privkey.pem"
 
 Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
 Environment="GO_ENV=production"

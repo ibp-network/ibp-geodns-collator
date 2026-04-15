@@ -2,7 +2,6 @@ package api
 
 import (
 	"database/sql"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -38,6 +37,10 @@ type BillingService struct {
 }
 
 func handleBillingBreakdown(w http.ResponseWriter, r *http.Request) {
+	if !requireDatabase(w) {
+		return
+	}
+
 	// Parse month and year
 	monthStr := r.URL.Query().Get("month")
 	yearStr := r.URL.Query().Get("year")
@@ -167,6 +170,10 @@ func handleBillingBreakdown(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleBillingSummary(w http.ResponseWriter, r *http.Request) {
+	if !requireDatabase(w) {
+		return
+	}
+
 	// Get current billing summary
 	summary := billing.GetSummary()
 
@@ -186,7 +193,12 @@ func handleBillingSummary(w http.ResponseWriter, r *http.Request) {
 	// Get SLA summary for current month
 	now := time.Now().UTC()
 	currentMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	sla, _ := billing.CalculateSLAAdjustments(currentMonth, &summary)
+	sla, err := billing.CalculateSLAAdjustments(currentMonth, &summary)
+	if err != nil {
+		log.Log(log.Error, "[CollatorAPI] Failed to calculate SLA summary: %v", err)
+		writeError(w, http.StatusInternalServerError, "Failed to calculate SLA summary")
+		return
+	}
 
 	var totalCredits float64
 	var slaViolations int
@@ -255,6 +267,7 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 			}
 		}
 	}
+	domains = common.NormalizeHosts(domains)
 
 	startTime := month
 	endTime := month.AddDate(0, 1, 0).Add(-time.Nanosecond)
@@ -345,6 +358,9 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 
 			events = append(events, event)
 		}
+		if err := rows.Err(); err != nil {
+			log.Log(log.Error, "[CollatorAPI] Site downtime row iteration failed: %v", err)
+		}
 	}
 
 	// Then get service-specific events
@@ -352,18 +368,7 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 		return events
 	}
 
-	// Build parameterized query with proper placeholders (lower-cased to match LOWER() on column)
-	placeholders := make([]string, len(domains))
-	args := make([]interface{}, 0, len(domains)+5)
-	args = append(args, memberName)
-	for i, domain := range domains {
-		placeholders[i] = "?"
-		args = append(args, domain)
-	}
-	args = append(args, endTime, startTime, startTime, endTime)
-
-	// Safe query construction with parameterized inputs
-	query := fmt.Sprintf(`
+	query := `
 		SELECT  
 			id,
 			check_type,
@@ -377,19 +382,15 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 		FROM member_events
 		WHERE member_name = ?
 		AND status = 0
-		AND (
-			LOWER(domain_name) IN (%s)
-			OR domain_name IS NULL
-			OR (domain_name = '' AND endpoint != '')
-		)
+		AND LOWER(check_type) IN ('domain', '2', 'endpoint', '3')
 		AND (
 			(start_time < ? AND (end_time IS NULL OR end_time > ?))
 			OR
 			(start_time >= ? AND start_time < ?)
 		)
-		ORDER BY start_time DESC`, strings.Join(placeholders, ","))
+		ORDER BY start_time DESC`
 
-	rows, err = data2.DB.Query(query, args...)
+	rows, err = data2.DB.Query(query, memberName, endTime, startTime, startTime, endTime)
 	if err != nil {
 		log.Log(log.Error, "[CollatorAPI] Failed to query service downtime events: %v", err)
 		return events
@@ -415,6 +416,9 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 		)
 		if err != nil {
 			log.Log(log.Error, "[CollatorAPI] Failed to scan downtime event: %v", err)
+			continue
+		}
+		if !common.EventMatchesService(event.DomainName, event.Endpoint, domains) {
 			continue
 		}
 
@@ -453,24 +457,13 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 
 		events = append(events, event)
 	}
+	if err := rows.Err(); err != nil {
+		log.Log(log.Error, "[CollatorAPI] Service downtime row iteration failed: %v", err)
+	}
 
 	return events
 }
 
 func extractDomainFromURL(rpcUrl string) string {
-	// Remove protocol
-	url := strings.TrimPrefix(rpcUrl, "wss://")
-	url = strings.TrimPrefix(url, "ws://")
-	url = strings.TrimPrefix(url, "https://")
-	url = strings.TrimPrefix(url, "http://")
-
-	// Remove path and port
-	if idx := strings.Index(url, "/"); idx != -1 {
-		url = url[:idx]
-	}
-	if idx := strings.Index(url, ":"); idx != -1 {
-		url = url[:idx]
-	}
-
-	return strings.ToLower(url)
+	return common.ExtractHost(rpcUrl)
 }

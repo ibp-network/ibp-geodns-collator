@@ -675,6 +675,7 @@ func getServiceDowntimeEvents(memberName, serviceName string, month time.Time) [
 			}
 		}
 	}
+	domains = common.NormalizeHosts(domains)
 
 	startTime := month
 	endTime := month.AddDate(0, 1, 0).Add(-time.Nanosecond)
@@ -745,22 +746,14 @@ func getServiceDowntimeEvents(memberName, serviceName string, month time.Time) [
 
 			events = append(events, event)
 		}
+		if err := rows.Err(); err != nil {
+			log.Log(log.Error, "[billing] Site downtime row iteration failed: %v", err)
+		}
 	}
 
 	// Then get service-specific events
 	if len(domains) > 0 {
-		// Build parameterized query with proper placeholders
-		placeholders := make([]string, len(domains))
-		args := make([]interface{}, 0, len(domains)+5)
-		args = append(args, memberName)
-		for i, domain := range domains {
-			placeholders[i] = "?"
-			args = append(args, domain)
-		}
-		args = append(args, endTime, startTime, startTime, endTime)
-
-		// Safe query construction with parameterized inputs
-		query := fmt.Sprintf(`
+		query := `
 			SELECT  
 				check_type,
 				check_name,
@@ -773,18 +766,17 @@ func getServiceDowntimeEvents(memberName, serviceName string, month time.Time) [
 				is_ipv6
 			FROM member_events
 			WHERE member_name = ?
-			AND check_type IN ('domain', '2', 'endpoint', '3')
+			AND LOWER(check_type) IN ('domain', '2', 'endpoint', '3')
 			AND status = 0
-			AND domain_name IN (%s)
 			AND (
 				(start_time < ? AND (end_time IS NULL OR end_time > ?))
 				OR
 				(start_time >= ? AND start_time < ?)
 			)
 			ORDER BY start_time DESC
-		`, strings.Join(placeholders, ","))
+		`
 
-		rows, err := data2.DB.Query(query, args...)
+		rows, err := data2.DB.Query(query, memberName, endTime, startTime, startTime, endTime)
 		if err != nil {
 			log.Log(log.Error, "[billing] Failed to query service downtime events: %v", err)
 			return events
@@ -809,6 +801,9 @@ func getServiceDowntimeEvents(memberName, serviceName string, month time.Time) [
 				log.Log(log.Error, "[billing] Failed to scan downtime event: %v", err)
 				continue
 			}
+			if !common.EventMatchesService(event.DomainName, event.Endpoint, domains) {
+				continue
+			}
 
 			event.CheckType = common.NormalizeCheckType(event.CheckType)
 
@@ -827,6 +822,9 @@ func getServiceDowntimeEvents(memberName, serviceName string, month time.Time) [
 			}
 
 			events = append(events, event)
+		}
+		if err := rows.Err(); err != nil {
+			log.Log(log.Error, "[billing] Service downtime row iteration failed: %v", err)
 		}
 	}
 
@@ -854,20 +852,7 @@ func drawMemberCard(pdf *gofpdf.Fpdf, x, y, w, h float64) {
 }
 
 func sanitizeFilename(name string) string {
-	// Replace any characters that might cause issues in filenames
-	replacer := strings.NewReplacer(
-		" ", "_",
-		"/", "_",
-		"\\", "_",
-		":", "_",
-		"*", "_",
-		"?", "_",
-		"\"", "_",
-		"<", "_",
-		">", "_",
-		"|", "_",
-	)
-	return replacer.Replace(name)
+	return common.SanitizeFilename(name)
 }
 
 func formatDuration(d time.Duration) string {
@@ -949,6 +934,9 @@ func getMemberDowntimeEvents(memberName string, month time.Time) []DowntimeEvent
 		}
 
 		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		log.Log(log.Error, "[billing] Member downtime row iteration failed: %v", err)
 	}
 
 	return events

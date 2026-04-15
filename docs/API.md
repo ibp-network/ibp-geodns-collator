@@ -189,6 +189,9 @@ Get historical downtime events.
 #### GET `/api/downtime/current`
 Get currently ongoing downtime events.
 
+**Query Parameters:**
+- `service` (string): Filter by service name
+
 **Response:**
 ```json
 [
@@ -228,6 +231,8 @@ Get downtime statistics summary.
   "average_downtime_hours": 2.99
 }
 ```
+
+`average_downtime_hours` is calculated across resolved events only. Ongoing downtime still contributes to `total_downtime_hours`.
 
 ---
 
@@ -304,7 +309,7 @@ List available billing PDF reports.
 **Query Parameters:**
 - `year` (string): Filter by year
 - `month` (string): Filter by month
-- `member` (string): Filter by member name
+- `member` (string): Filter by member name. When set, only member PDFs are listed.
 
 **Response:**
 ```json
@@ -397,6 +402,8 @@ Get detailed statistics for a member.
 - `name` (string, required): Member name
 - `start` (string): Start date
 - `end` (string): End date
+
+Returns `404` when `name` does not match a configured member.
 
 **Response:**
 ```json

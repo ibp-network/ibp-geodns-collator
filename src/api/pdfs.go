@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	common "github.com/ibp-network/ibp-geodns-collator/src/common"
 	cfg "github.com/ibp-network/ibp-geodns-libs/config"
 	log "github.com/ibp-network/ibp-geodns-libs/logging"
 )
@@ -18,6 +19,9 @@ import (
 func initPDFManager() {
 	c := cfg.GetConfig()
 	baseDir := filepath.Join(c.Local.System.WorkDir, "tmp")
+	if err := os.MkdirAll(baseDir, 0755); err != nil {
+		log.Log(log.Error, "[PDFManager] Failed to create base directory %s: %v", baseDir, err)
+	}
 
 	pdfManager = &PDFManager{
 		pdfFiles: make(map[string][]PDFInfo),
@@ -131,9 +135,7 @@ func (pm *PDFManager) scanMonthDirectory(dirPath, monthKey string) ([]PDFInfo, e
 		if matches := overviewPattern.FindStringSubmatch(file.Name()); matches != nil {
 			pdfInfo.IsOverview = true
 		} else if matches := pdfFilePattern.FindStringSubmatch(file.Name()); matches != nil {
-			// Extract member name and convert underscores back to spaces for display
-			memberName := strings.ReplaceAll(matches[3], "_", " ")
-			pdfInfo.MemberName = memberName
+			pdfInfo.MemberName = resolveMemberNameFromFilename(matches[3])
 		} else {
 			// Skip files that don't match expected patterns
 			log.Log(log.Debug, "[PDFManager] Skipping file with unexpected name: %s", file.Name())
@@ -238,7 +240,7 @@ func handleListPDFs(w http.ResponseWriter, r *http.Request) {
 	// Get query parameters
 	year := r.URL.Query().Get("year")
 	month := r.URL.Query().Get("month")
-	memberName := r.URL.Query().Get("member")
+	memberName := sanitizeString(r.URL.Query().Get("member"))
 
 	// Validate year if provided
 	if year != "" && !validateYear(year) {
@@ -249,6 +251,10 @@ func handleListPDFs(w http.ResponseWriter, r *http.Request) {
 	// Validate month if provided
 	if month != "" && !validateMonth(month) {
 		writeError(w, http.StatusBadRequest, "Invalid month format")
+		return
+	}
+	if memberName != "" && !validateMemberName(memberName) {
+		writeError(w, http.StatusBadRequest, "Invalid member name")
 		return
 	}
 
@@ -305,7 +311,7 @@ func handleDownloadPDF(w http.ResponseWriter, r *http.Request) {
 	// Get query parameters
 	year := r.URL.Query().Get("year")
 	month := r.URL.Query().Get("month")
-	memberName := r.URL.Query().Get("member")
+	memberName := sanitizeString(r.URL.Query().Get("member"))
 	isOverview := r.URL.Query().Get("type") == "overview"
 
 	// Validate required parameters
@@ -327,6 +333,10 @@ func handleDownloadPDF(w http.ResponseWriter, r *http.Request) {
 
 	if !validateMonth(month) {
 		writeError(w, http.StatusBadRequest, "Invalid month format")
+		return
+	}
+	if !isOverview && !validateMemberName(memberName) {
+		writeError(w, http.StatusBadRequest, "Invalid member name")
 		return
 	}
 
@@ -364,8 +374,7 @@ func handleDownloadPDF(w http.ResponseWriter, r *http.Request) {
 	if isOverview {
 		downloadName = fmt.Sprintf("%s_%s-Monthly_Overview.pdf", year, monthFormatted)
 	} else {
-		// Convert spaces to underscores in member name for filename
-		safeMemberName := strings.ReplaceAll(memberName, " ", "_")
+		safeMemberName := common.SanitizeFilename(memberName)
 		downloadName = fmt.Sprintf("%s_%s-IBP-Service_%s.pdf", year, monthFormatted, safeMemberName)
 	}
 
@@ -410,4 +419,14 @@ func validateMonth(month string) bool {
 	// Check valid month range
 	monthInt := int(month[0]-'0')*10 + int(month[1]-'0')
 	return monthInt >= 1 && monthInt <= 12
+}
+
+func resolveMemberNameFromFilename(fileToken string) string {
+	c := cfg.GetConfig()
+	for memberName := range c.Members {
+		if common.SanitizeFilename(memberName) == fileToken {
+			return memberName
+		}
+	}
+	return strings.ReplaceAll(fileToken, "_", " ")
 }

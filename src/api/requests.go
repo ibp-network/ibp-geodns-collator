@@ -149,9 +149,13 @@ func buildFilterConditions(filter RequestFilter, baseArgs []interface{}) (string
 }
 
 func handleRequestsByCountry(w http.ResponseWriter, r *http.Request) {
+	if !requireDatabase(w) {
+		return
+	}
+
 	start, end, err := parseTimeParams(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid date format")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -202,14 +206,23 @@ func handleRequestsByCountry(w http.ResponseWriter, r *http.Request) {
 
 		results = append(results, stat)
 	}
+	if err := rows.Err(); err != nil {
+		log.Log(log.Error, "[CollatorAPI] Country request row iteration failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, results)
 }
 
 func handleRequestsByASN(w http.ResponseWriter, r *http.Request) {
+	if !requireDatabase(w) {
+		return
+	}
+
 	start, end, err := parseTimeParams(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid date format")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -253,14 +266,23 @@ func handleRequestsByASN(w http.ResponseWriter, r *http.Request) {
 		}
 		results = append(results, stat)
 	}
+	if err := rows.Err(); err != nil {
+		log.Log(log.Error, "[CollatorAPI] ASN request row iteration failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, results)
 }
 
 func handleRequestsByService(w http.ResponseWriter, r *http.Request) {
+	if !requireDatabase(w) {
+		return
+	}
+
 	start, end, err := parseTimeParams(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid date format")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -335,14 +357,23 @@ func handleRequestsByService(w http.ResponseWriter, r *http.Request) {
 		stat.Service = domainToServiceName(stat.Domain)
 		results = append(results, stat)
 	}
+	if err := rows.Err(); err != nil {
+		log.Log(log.Error, "[CollatorAPI] Service request row iteration failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, results)
 }
 
 func handleRequestsByMember(w http.ResponseWriter, r *http.Request) {
+	if !requireDatabase(w) {
+		return
+	}
+
 	start, end, err := parseTimeParams(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid date format")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -385,14 +416,23 @@ func handleRequestsByMember(w http.ResponseWriter, r *http.Request) {
 		}
 		results = append(results, stat)
 	}
+	if err := rows.Err(); err != nil {
+		log.Log(log.Error, "[CollatorAPI] Member request row iteration failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, results)
 }
 
 func handleRequestsSummary(w http.ResponseWriter, r *http.Request) {
+	if !requireDatabase(w) {
+		return
+	}
+
 	start, end, err := parseTimeParams(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid date format")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -411,35 +451,56 @@ func handleRequestsSummary(w http.ResponseWriter, r *http.Request) {
 	`, start.Format("2006-01-02"), end.Format("2006-01-02")).Scan(&totalRequests)
 	if err != nil {
 		log.Log(log.Error, "[CollatorAPI] Failed to get total requests: %v", err)
-		totalRequests = 0
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	// Get unique counts
 	var uniqueCountries, uniqueASNs, uniqueMembers, uniqueDomains int
 
-	data2.DB.QueryRow(`
+	err = data2.DB.QueryRow(`
 		SELECT COUNT(DISTINCT country_code) 
 		FROM requests 
 		WHERE date >= ? AND date <= ?
 	`, start.Format("2006-01-02"), end.Format("2006-01-02")).Scan(&uniqueCountries)
+	if err != nil {
+		log.Log(log.Error, "[CollatorAPI] Failed to get unique countries: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 
-	data2.DB.QueryRow(`
+	err = data2.DB.QueryRow(`
 		SELECT COUNT(DISTINCT network_asn) 
 		FROM requests 
 		WHERE date >= ? AND date <= ? AND network_asn IS NOT NULL
 	`, start.Format("2006-01-02"), end.Format("2006-01-02")).Scan(&uniqueASNs)
+	if err != nil {
+		log.Log(log.Error, "[CollatorAPI] Failed to get unique ASNs: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 
-	data2.DB.QueryRow(`
+	err = data2.DB.QueryRow(`
 		SELECT COUNT(DISTINCT member_name) 
 		FROM requests 
 		WHERE date >= ? AND date <= ? AND member_name IS NOT NULL
 	`, start.Format("2006-01-02"), end.Format("2006-01-02")).Scan(&uniqueMembers)
+	if err != nil {
+		log.Log(log.Error, "[CollatorAPI] Failed to get unique members: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 
-	data2.DB.QueryRow(`
+	err = data2.DB.QueryRow(`
 		SELECT COUNT(DISTINCT domain_name) 
 		FROM requests 
 		WHERE date >= ? AND date <= ? AND domain_name != ''
 	`, start.Format("2006-01-02"), end.Format("2006-01-02")).Scan(&uniqueDomains)
+	if err != nil {
+		log.Log(log.Error, "[CollatorAPI] Failed to get unique domains: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
+	}
 
 	summary := map[string]interface{}{
 		"start_date":       start.Format("2006-01-02"),

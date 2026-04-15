@@ -117,15 +117,8 @@ func Init() {
 	// Monthly member billing PDF generation
 	go func() {
 		for {
-			// Calculate next month's first day at 00:05 UTC
 			now := time.Now().UTC()
-			nextMonth := time.Date(now.Year(), now.Month(), 1, 0, 5, 0, 0, time.UTC).AddDate(0, 1, 0)
-
-			// If we're already past the 5th minute of the first day, wait for next month
-			if now.Day() == 1 && now.Hour() == 0 && now.Minute() >= 5 {
-				nextMonth = nextMonth.AddDate(0, 1, 0)
-			}
-
+			nextMonth := nextMonthlyBillingRun(now)
 			waitDuration := time.Until(nextMonth)
 			log.Log(log.Info, "[billing] Next member billing PDF generation scheduled for %s (in %v)",
 				nextMonth.Format("2006-01-02 15:04:05"), waitDuration)
@@ -141,18 +134,16 @@ func Init() {
 
 		// Check if we need to generate last month's billing
 		now := time.Now().UTC()
-		if now.Day() >= 1 { // We're past the first of the month
-			lastMonth := now.AddDate(0, -1, 0)
-			lastMonthStart := time.Date(lastMonth.Year(), lastMonth.Month(), 1, 0, 0, 0, 0, time.UTC)
+		lastMonth := now.AddDate(0, -1, 0)
+		lastMonthStart := time.Date(lastMonth.Year(), lastMonth.Month(), 1, 0, 0, 0, 0, time.UTC)
 
-			billingGenMutex.Lock()
-			needsGeneration := lastGeneratedBillingMonth.Before(lastMonthStart)
-			billingGenMutex.Unlock()
+		billingGenMutex.Lock()
+		needsGeneration := lastGeneratedBillingMonth.Before(lastMonthStart)
+		billingGenMutex.Unlock()
 
-			if needsGeneration {
-				log.Log(log.Info, "[billing] Generating initial member billing PDF for previous month")
-				generateMonthlyBillingPDF()
-			}
+		if needsGeneration {
+			log.Log(log.Info, "[billing] Generating initial member billing PDF for previous month")
+			generateMonthlyBillingPDF()
 		}
 
 		// Always generate current service cost PDF
@@ -272,8 +263,11 @@ func refresh(verbose bool) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func generateServiceCostPDF() {
-	conf := cfg.GetConfig()
-	tmpDir := resolveTempDir(conf)
+	tmpDir, err := ensureTempDir()
+	if err != nil {
+		log.Log(log.Warn, "[billing] tmp directory unavailable — service cost PDF skipped: %v", err)
+		return
+	}
 	if tmpDir == "" {
 		log.Log(log.Warn, "[billing] tmp directory not configured — service cost PDF skipped")
 		return
@@ -328,8 +322,11 @@ func generateMonthlyBillingPDF() {
 
 	log.Log(log.Info, "[billing] Starting member billing PDF generation for %s", billingMonth.Format("January 2006"))
 
-	conf := cfg.GetConfig()
-	tmpDir := resolveTempDir(conf)
+	tmpDir, err := ensureTempDir()
+	if err != nil {
+		log.Log(log.Warn, "[billing] tmp directory unavailable — member billing PDF skipped: %v", err)
+		return
+	}
 	if tmpDir == "" {
 		log.Log(log.Warn, "[billing] tmp directory not configured — member billing PDF skipped")
 		return
@@ -368,9 +365,10 @@ func generateMonthlyBillingPDF() {
 
 	snap := GetSummary()
 
-	// If PDFs already exist for all members and overview, mark as generated and exit
+	// If PDFs already exist for all members and overview, mark as generated and exit.
 	if monthComplete(monthDir, billingMonth, &snap) {
 		log.Log(log.Info, "[billing] Monthly PDFs already complete for %s — marking done", billingMonth.Format("January 2006"))
+		success = true
 		if err := writeLastGeneratedMonthMarker(billingMonth); err != nil {
 			log.Log(log.Warn, "[billing] failed to write billing marker after detecting complete set: %v", err)
 		}
@@ -381,8 +379,8 @@ func generateMonthlyBillingPDF() {
 	sla, err := CalculateSLAAdjustments(billingMonth, &snap)
 	if err != nil {
 		log.Log(log.Error, "[billing] failed SLA calculation: %v", err)
-		// Continue anyway with empty SLA data
-		sla = make(SLASummary)
+		log.Log(log.Warn, "[billing] Monthly billing generation for %s skipped until SLA data can be calculated", billingMonth.Format("January 2006"))
+		return
 	}
 
 	// Log members not meeting SLA
@@ -487,14 +485,34 @@ func logDetails(memCosts map[string]MemberCost, svcCosts map[string]ServiceCost)
 	}
 }
 
-func resolveTempDir(conf interface{}) string {
+func resolveTempDir() string {
 	c := cfg.GetConfig()
 	return filepath.Join(c.Local.System.WorkDir, "tmp")
 }
 
+func ensureTempDir() (string, error) {
+	tmpDir := resolveTempDir()
+	if tmpDir == "" {
+		return "", nil
+	}
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		return "", err
+	}
+	return tmpDir, nil
+}
+
+func nextMonthlyBillingRun(now time.Time) time.Time {
+	now = now.UTC()
+	currentMonthRun := time.Date(now.Year(), now.Month(), 1, 0, 5, 0, 0, time.UTC)
+	if now.Day() == 1 && now.Before(currentMonthRun) {
+		return currentMonthRun
+	}
+	return currentMonthRun.AddDate(0, 1, 0)
+}
+
 // loadLastGeneratedMonthMarker restores lastGeneratedBillingMonth from marker file (best-effort).
 func loadLastGeneratedMonthMarker() {
-	tmpDir := resolveTempDir(nil)
+	tmpDir := resolveTempDir()
 	if tmpDir == "" {
 		return
 	}
@@ -512,7 +530,7 @@ func loadLastGeneratedMonthMarker() {
 
 // writeLastGeneratedMonthMarker persists the last generated month to disk (best-effort).
 func writeLastGeneratedMonthMarker(month time.Time) error {
-	tmpDir := resolveTempDir(nil)
+	tmpDir := resolveTempDir()
 	if tmpDir == "" {
 		return fmt.Errorf("tmp dir not configured")
 	}
@@ -530,7 +548,7 @@ func monthComplete(monthDir string, month time.Time, snap *Summary) bool {
 		return false
 	}
 	for memberName := range snap.Members {
-		memberNameSafe := strings.ReplaceAll(memberName, " ", "_")
+		memberNameSafe := sanitizeFilename(memberName)
 		memberFile := fmt.Sprintf("%d_%02d-IBP-Service_%s.pdf", month.Year(), int(month.Month()), memberNameSafe)
 		if _, err := os.Stat(filepath.Join(monthDir, memberFile)); err != nil {
 			return false

@@ -49,10 +49,14 @@ The IBP GeoDNS Collator aggregates distributed metrics from DNS nodes and monito
     "WorkDir": "/path/to/workdir/",
     "LogLevel": "Info",
     "ConfigUrls": {
+      "StaticDNSConfig": "https://...",
       "MembersConfig": "https://...",
       "ServicesConfig": "https://...",
-      "IaasPricingConfig": "https://..."
-    }
+      "IaasPricingConfig": "https://...",
+      "ServicesRequestsConfig": "https://..."
+    },
+    "ConfigReloadTime": 3600,
+    "MinimumOfflineTime": 900
   },
   "Nats": {
     "NodeID": "COLLATOR-01",
@@ -63,9 +67,15 @@ The IBP GeoDNS Collator aggregates distributed metrics from DNS nodes and monito
   "Mysql": {
     "Host": "localhost",
     "Port": "3306",
-    "User": "ibpcollator",
+    "User": "collator",
     "Pass": "__SET_ME__",
-    "DB": "ibpcollator"
+    "DB": "collator"
+  },
+  "Matrix": {
+    "HomeServerURL": "https://matrix.example.org",
+    "Username": "__SET_ME__",
+    "Password": "__SET_ME__",
+    "RoomID": "!roomid:matrix.example.org"
   },
   "CollatorApi": {
     "ListenAddress": "0.0.0.0",
@@ -73,6 +83,8 @@ The IBP GeoDNS Collator aggregates distributed metrics from DNS nodes and monito
   }
 }
 ```
+
+The complete example configuration lives in `docs/ibpcollator-config.json`.
 
 ## API Endpoints
 
@@ -133,69 +145,32 @@ Generated PDFs are stored in: `{WorkDir}/tmp/YYYY-MM/`
 
 ### Build
 ```bash
-go build -o ibp-geodns-collator ./src/IBPCollator.go
+go build -o bin/ibp-collator ./src/IBPCollator.go
 ```
 
 ### Run
 ```bash
-./ibp-geodns-collator -config=/path/to/config.json
+./bin/ibp-collator -config ./config/ibpcollator.json
 ```
 
 ### Docker
-```dockerfile
-FROM golang:1.24-alpine AS builder
-WORKDIR /app
-COPY . .
-RUN go build -o collator ./src/IBPCollator.go
-
-FROM alpine:latest
-RUN apk add --no-cache ca-certificates
-COPY --from=builder /app/collator /collator
-ENTRYPOINT ["/collator"]
+```bash
+docker build -t ibp-geodns-collator:dev .
+docker run --rm \
+  -p 9000:9000 \
+  -v "$(pwd)/config:/app/config" \
+  -v "$(pwd)/tmp:/app/tmp" \
+  ibp-geodns-collator:dev
 ```
 
 ## Database Schema
 
-### requests table
-```sql
-CREATE TABLE requests (
-    date DATE,
-    node_id VARCHAR(100),
-    domain_name VARCHAR(255),
-    member_name VARCHAR(255),
-    country_code CHAR(2),
-    network_asn VARCHAR(20),
-    network_name VARCHAR(255),
-    country_name VARCHAR(255),
-    is_ipv6 TINYINT(1),
-    hits INT,
-    PRIMARY KEY (date, node_id, domain_name, member_name, 
-                 network_asn, network_name, country_code, 
-                 country_name, is_ipv6)
-);
-```
+The authoritative schema is `docs/mysql/db.sql`.
 
-### member_events table
-```sql
-CREATE TABLE member_events (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    check_type INT,
-    check_name VARCHAR(100),
-    endpoint TEXT,
-    domain_name VARCHAR(255),
-    member_name VARCHAR(255),
-    status TINYINT(1),
-    is_ipv6 TINYINT(1),
-    start_time TIMESTAMP,
-    end_time TIMESTAMP NULL,
-    error TEXT,
-    vote_data JSON,
-    additional_data JSON,
-    UNIQUE KEY unique_event (check_type, check_name, endpoint(255), 
-                            domain_name, member_name, is_ipv6, 
-                            status, end_time)
-);
-```
+Key runtime expectations:
+- `member_events.check_type` is stored as a string field and the service normalizes legacy textual values to numeric equivalents at startup.
+- `requests` and `member_events` both use de-duplication constraints that differ from the older examples that were previously documented here.
+- If you are provisioning or migrating the database, use `docs/mysql/db.sql` rather than older embedded snippets.
 
 ## SSL/TLS Support
 
@@ -203,7 +178,7 @@ Enable HTTPS by setting environment variables:
 ```bash
 export SSL_CERT=/path/to/cert.pem
 export SSL_KEY=/path/to/key.pem
-./ibp-geodns-collator
+./bin/ibp-collator -config ./config/ibpcollator.json
 ```
 
 The collator monitors certificate files and reloads them automatically when updated.

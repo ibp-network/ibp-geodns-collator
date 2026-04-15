@@ -11,6 +11,7 @@ import (
 	"time"
 
 	cfg "github.com/ibp-network/ibp-geodns-libs/config"
+	data2 "github.com/ibp-network/ibp-geodns-libs/data2"
 	log "github.com/ibp-network/ibp-geodns-libs/logging"
 )
 
@@ -241,6 +242,14 @@ func writeError(w http.ResponseWriter, statusCode int, message string) {
 	writeJSON(w, statusCode, map[string]string{"error": message})
 }
 
+func requireDatabase(w http.ResponseWriter) bool {
+	if data2.DB != nil {
+		return true
+	}
+	writeError(w, http.StatusInternalServerError, "Database not initialized")
+	return false
+}
+
 func parseTimeParams(r *http.Request) (time.Time, time.Time, error) {
 	startStr := r.URL.Query().Get("start")
 	endStr := r.URL.Query().Get("end")
@@ -255,12 +264,15 @@ func parseTimeParams(r *http.Request) (time.Time, time.Time, error) {
 
 	start, err := time.Parse("2006-01-02", startStr)
 	if err != nil {
-		return time.Time{}, time.Time{}, err
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid start date format")
 	}
 
 	end, err := time.Parse("2006-01-02", endStr)
 	if err != nil {
-		return time.Time{}, time.Time{}, err
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid end date format")
+	}
+	if start.After(end) {
+		return time.Time{}, time.Time{}, fmt.Errorf("start date must be on or before end date")
 	}
 
 	// End of day for end date

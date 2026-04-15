@@ -43,8 +43,9 @@ func main() {
 		log.Log(log.Error, "[collator] check_type numeric migration failed: %v", err)
 	}
 
-	// Wait a moment to ensure DB is fully ready
-	time.Sleep(2 * time.Second)
+	if err := waitForDatabaseReady(15*time.Second, 500*time.Millisecond); err != nil {
+		log.Log(log.Warn, "[collator] database readiness check timed out: %v", err)
+	}
 
 	billing.Init() // ← billing subsystem
 	api.Init()     // ← NEW: API subsystem
@@ -108,4 +109,26 @@ func migrateMemberEventCheckTypesToNumeric() error {
 	}
 
 	return nil
+}
+
+func waitForDatabaseReady(timeout, interval time.Duration) error {
+	if data2.DB == nil {
+		return nil
+	}
+
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		if err := data2.DB.Ping(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+
+		if time.Now().After(deadline) {
+			return lastErr
+		}
+
+		time.Sleep(interval)
+	}
 }

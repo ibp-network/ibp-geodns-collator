@@ -52,9 +52,13 @@ func handleMembers(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleMemberStats(w http.ResponseWriter, r *http.Request) {
+	if !requireDatabase(w) {
+		return
+	}
+
 	start, end, err := parseTimeParams(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid date format")
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -67,7 +71,12 @@ func handleMemberStats(w http.ResponseWriter, r *http.Request) {
 	// Get the member's Details.Name for database lookup
 	c := cfg.GetConfig()
 	dbMemberName := memberName
-	if member, exists := c.Members[memberName]; exists && member.Details.Name != "" {
+	member, exists := c.Members[memberName]
+	if !exists {
+		writeError(w, http.StatusNotFound, "Member not found")
+		return
+	}
+	if member.Details.Name != "" {
 		dbMemberName = member.Details.Name
 	}
 
@@ -82,7 +91,8 @@ func handleMemberStats(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		log.Log(log.Error, "[CollatorAPI] Failed to get member requests: %v", err)
-		totalRequests = 0
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	// Get downtime stats
@@ -104,7 +114,10 @@ func handleMemberStats(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		for rows.Next() {
 			var eventStart, eventEnd time.Time
-			rows.Scan(&eventStart, &eventEnd)
+			if err := rows.Scan(&eventStart, &eventEnd); err != nil {
+				log.Log(log.Error, "[CollatorAPI] Failed to scan member downtime row: %v", err)
+				continue
+			}
 
 			// Adjust to date range
 			if eventStart.Before(start) {
@@ -117,6 +130,15 @@ func handleMemberStats(w http.ResponseWriter, r *http.Request) {
 			totalDowntimeHours += eventEnd.Sub(eventStart).Hours()
 			totalDowntimeEvents++
 		}
+		if err := rows.Err(); err != nil {
+			log.Log(log.Error, "[CollatorAPI] Member downtime row iteration failed: %v", err)
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+	} else {
+		log.Log(log.Error, "[CollatorAPI] Failed to query member downtime: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	// Calculate uptime percentage
@@ -151,9 +173,21 @@ func handleMemberStats(w http.ResponseWriter, r *http.Request) {
 		defer countryRows.Close()
 		for countryRows.Next() {
 			var stat CountryStat
-			countryRows.Scan(&stat.Country, &stat.Name, &stat.Requests)
+			if err := countryRows.Scan(&stat.Country, &stat.Name, &stat.Requests); err != nil {
+				log.Log(log.Error, "[CollatorAPI] Failed to scan member country stats row: %v", err)
+				continue
+			}
 			topCountries = append(topCountries, stat)
 		}
+		if err := countryRows.Err(); err != nil {
+			log.Log(log.Error, "[CollatorAPI] Member country stats row iteration failed: %v", err)
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+	} else {
+		log.Log(log.Error, "[CollatorAPI] Failed to query member country stats: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	// Get service breakdown
@@ -180,10 +214,22 @@ func handleMemberStats(w http.ResponseWriter, r *http.Request) {
 		defer serviceRows.Close()
 		for serviceRows.Next() {
 			var stat ServiceStat
-			serviceRows.Scan(&stat.Domain, &stat.Requests)
+			if err := serviceRows.Scan(&stat.Domain, &stat.Requests); err != nil {
+				log.Log(log.Error, "[CollatorAPI] Failed to scan member service stats row: %v", err)
+				continue
+			}
 			stat.Service = domainToServiceName(stat.Domain)
 			serviceStats = append(serviceStats, stat)
 		}
+		if err := serviceRows.Err(); err != nil {
+			log.Log(log.Error, "[CollatorAPI] Member service stats row iteration failed: %v", err)
+			writeError(w, http.StatusInternalServerError, "Database error")
+			return
+		}
+	} else {
+		log.Log(log.Error, "[CollatorAPI] Failed to query member service stats: %v", err)
+		writeError(w, http.StatusInternalServerError, "Database error")
+		return
 	}
 
 	stats := map[string]interface{}{
