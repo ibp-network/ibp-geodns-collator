@@ -112,8 +112,9 @@ func buildFilterConditions(filter RequestFilter, baseArgs []interface{}) (string
 	}
 
 	if len(filter.Members) > 0 {
-		placeholders := make([]string, len(filter.Members))
-		for i, member := range filter.Members {
+		memberFilters := expandMemberFilters(filter.Members)
+		placeholders := make([]string, len(memberFilters))
+		for i, member := range memberFilters {
 			placeholders[i] = "?"
 			args = append(args, member)
 		}
@@ -147,6 +148,38 @@ func buildFilterConditions(filter RequestFilter, baseArgs []interface{}) (string
 	}
 
 	return whereClause, args
+}
+
+func expandMemberFilters(members []string) []string {
+	if len(members) == 0 {
+		return nil
+	}
+
+	c := cfg.GetConfig()
+	seen := make(map[string]struct{}, len(members)*2)
+	expanded := make([]string, 0, len(members)*2)
+
+	for _, member := range members {
+		member = strings.TrimSpace(member)
+		if member == "" {
+			continue
+		}
+		if _, ok := seen[member]; !ok {
+			seen[member] = struct{}{}
+			expanded = append(expanded, member)
+		}
+		if cfgMember, ok := c.Members[member]; ok {
+			dbName := strings.TrimSpace(cfgMember.Details.Name)
+			if dbName != "" {
+				if _, ok := seen[dbName]; !ok {
+					seen[dbName] = struct{}{}
+					expanded = append(expanded, dbName)
+				}
+			}
+		}
+	}
+
+	return expanded
 }
 
 func handleRequestsByCountry(w http.ResponseWriter, r *http.Request) {

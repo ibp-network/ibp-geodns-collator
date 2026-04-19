@@ -102,7 +102,7 @@ func handleBillingBreakdown(w http.ResponseWriter, r *http.Request) {
 		memberMeetsSLA := true
 
 		for serviceName, baseCost := range memberCost.ServiceCosts {
-			breakdown := getSLABreakdown(sla, memberName, serviceName)
+			breakdown := getSLABreakdown(sla, memberName, serviceName, billingMonth)
 			billedCost := baseCost * (breakdown.Uptime / 100.0)
 			credits := baseCost - billedCost
 
@@ -230,22 +230,14 @@ func handleBillingSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-func getSLABreakdown(sla billing.SLASummary, member, service string) billing.SLABreakdown {
+func getSLABreakdown(sla billing.SLASummary, member, service string, month time.Time) billing.SLABreakdown {
 	if memberServices, ok := sla[member]; ok {
 		if breakdown, ok := memberServices[service]; ok {
 			return breakdown
 		}
 	}
-	// Return default if not found
-	return billing.SLABreakdown{
-		HoursTotal:   730,
-		HoursDown:    0,
-		HoursUp:      730,
-		Uptime:       100.0,
-		SLAThreshold: billing.DefaultSLAPercentage,
-		SLAHours:     730 * (billing.DefaultSLAPercentage / 100.0),
-		MeetsSLA:     true,
-	}
+	log.Log(log.Warn, "[CollatorAPI] missing SLA breakdown for member=%s service=%s month=%s; using default month hours", member, service, month.Format("2006-01"))
+	return billing.DefaultSLABreakdownForMonth(month)
 }
 
 func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) []DowntimeEvent {
@@ -283,18 +275,18 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 		ORDER BY start_time DESC
 	`
 
-	rows, err := data2.DB.Query(siteQuery, memberName, endTime, startTime, startTime, endTime)
+	siteRows, err := data2.DB.Query(siteQuery, memberName, endTime, startTime, startTime, endTime)
 	if err != nil {
 		log.Log(log.Error, "[CollatorAPI] Failed to query site downtime events: %v", err)
 	} else {
-		defer rows.Close()
-		for rows.Next() {
+		defer siteRows.Close()
+		for siteRows.Next() {
 			var event DowntimeEvent
 			var domainName, endpoint, errorText sql.NullString
 			var isIPv6 int
 			var endTime sql.NullTime
 
-			err := rows.Scan(
+			err := siteRows.Scan(
 				&event.ID,
 				&event.CheckType,
 				&event.CheckName,
@@ -345,7 +337,7 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 
 			events = append(events, event)
 		}
-		if err := rows.Err(); err != nil {
+		if err := siteRows.Err(); err != nil {
 			log.Log(log.Error, "[CollatorAPI] Site downtime row iteration failed: %v", err)
 		}
 	}
@@ -377,20 +369,20 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 		)
 		ORDER BY start_time DESC`
 
-	rows, err = data2.DB.Query(query, memberName, endTime, startTime, startTime, endTime)
+	serviceRows, err := data2.DB.Query(query, memberName, endTime, startTime, startTime, endTime)
 	if err != nil {
 		log.Log(log.Error, "[CollatorAPI] Failed to query service downtime events: %v", err)
 		return events
 	}
-	defer rows.Close()
+	defer serviceRows.Close()
 
-	for rows.Next() {
+	for serviceRows.Next() {
 		var event DowntimeEvent
 		var domainName, endpoint, errorText sql.NullString
 		var isIPv6 int
 		var endTime sql.NullTime
 
-		err := rows.Scan(
+		err := serviceRows.Scan(
 			&event.ID,
 			&event.CheckType,
 			&event.CheckName,
@@ -444,7 +436,7 @@ func getServiceDowntimeForAPI(memberName, serviceName string, month time.Time) [
 
 		events = append(events, event)
 	}
-	if err := rows.Err(); err != nil {
+	if err := serviceRows.Err(); err != nil {
 		log.Log(log.Error, "[CollatorAPI] Service downtime row iteration failed: %v", err)
 	}
 

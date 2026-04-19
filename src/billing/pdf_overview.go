@@ -144,7 +144,7 @@ func writeMonthlyOverviewPDF(sum *Summary, sla SLASummary, outDir string, month 
 
 		for svcName, baseCost := range sum.Members[mem].ServiceCosts {
 			row.baseCost += baseCost
-			breakdown := getSLABreakdown(sla, mem, svcName)
+			breakdown := getSLABreakdown(sla, mem, svcName, month)
 			if breakdown.HoursDown > 0 {
 				row.downtimeServices++
 			}

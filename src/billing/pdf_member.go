@@ -332,7 +332,7 @@ func writeMemberPDF(memberName string, sum *Summary, sla SLASummary, outDir stri
 
 	for svcName, baseCost := range memberCost.ServiceCosts {
 		totalServices++
-		breakdown := getSLABreakdown(sla, memberName, svcName)
+		breakdown := getSLABreakdown(sla, memberName, svcName, month)
 		billed := baseCost * (breakdown.Uptime / 100.0)
 		totalBilled += billed
 		totalDowntimeHours += breakdown.HoursDown
@@ -509,7 +509,7 @@ func writeMemberPDF(memberName string, sum *Summary, sla SLASummary, outDir stri
 			pdf.CellFormat(180, 6, svcName, "", 1, "L", false, 0, "")
 
 			baseCost := memberCost.ServiceCosts[svcName]
-			breakdown := getSLABreakdown(sla, memberName, svcName)
+			breakdown := getSLABreakdown(sla, memberName, svcName, month)
 			billed := baseCost * (breakdown.Uptime / 100.0)
 			levelTotal += billed
 			memberTotal += billed

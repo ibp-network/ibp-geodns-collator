@@ -122,6 +122,22 @@ func CalculateSLAAdjustments(month time.Time, sum *Summary) (SLASummary, error) 
 	return out, nil
 }
 
+func DefaultSLABreakdownForMonth(month time.Time) SLABreakdown {
+	startTime := time.Date(month.Year(), month.Month(), 1, 0, 0, 0, 0, time.UTC)
+	endTime := startTime.AddDate(0, 1, 0)
+	totalHours := endTime.Sub(startTime).Hours()
+
+	return SLABreakdown{
+		HoursTotal:   totalHours,
+		HoursDown:    0,
+		HoursUp:      totalHours,
+		Uptime:       100.0,
+		SLAThreshold: DefaultSLAPercentage,
+		SLAHours:     totalHours * (DefaultSLAPercentage / 100.0),
+		MeetsSLA:     true,
+	}
+}
+
 // calculateServiceDowntime calculates total downtime hours for a specific service
 func calculateServiceDowntime(memberName, serviceName string, services map[string]cfg.Service, startTime, endTime time.Time) float64 {
 	if data2.DB == nil {

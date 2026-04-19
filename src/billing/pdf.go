@@ -233,23 +233,14 @@ func writeServiceCostPDF(sum *Summary, tmpDir string) error {
 
 ---------------------------------------------------------------------
 */
-func getSLABreakdown(sla SLASummary, member, service string) SLABreakdown {
+func getSLABreakdown(sla SLASummary, member, service string, month time.Time) SLABreakdown {
 	if upm, ok := sla[member]; ok {
 		if bd, ok2 := upm[service]; ok2 {
 			return bd
 		}
 	}
-
-	// Return default if not found
-	return SLABreakdown{
-		HoursTotal:   730, // Default month hours
-		HoursDown:    0,
-		HoursUp:      730,
-		Uptime:       100.0,
-		SLAThreshold: DefaultSLAPercentage,
-		SLAHours:     730 * (DefaultSLAPercentage / 100.0),
-		MeetsSLA:     true,
-	}
+	log.Log(log.Warn, "[billing] missing SLA breakdown for member=%s service=%s month=%s; using default month hours", member, service, month.Format("2006-01"))
+	return DefaultSLABreakdownForMonth(month)
 }
 
 // MemberStats holds DNS request statistics for a member
