@@ -3,7 +3,7 @@ module github.com/ibp-network/ibp-geodns-collator
 go 1.24.2
 
 require (
-	github.com/ibp-network/ibp-geodns-libs v0.6.10
+	github.com/ibp-network/ibp-geodns-libs v0.6.12
 	github.com/phpdave11/gofpdf v1.4.3
 )
 
