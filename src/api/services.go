@@ -54,13 +54,25 @@ func handleServices(w http.ResponseWriter, r *http.Request) {
 
 	// If specific service requested
 	if serviceName != "" {
-		service, exists := c.Services[serviceName]
+		var (
+			service cfg.Service
+			exists  bool
+			keyName string
+		)
+		for name, candidate := range c.Services {
+			if strings.EqualFold(name, serviceName) {
+				service = candidate
+				exists = true
+				keyName = name
+				break
+			}
+		}
 		if !exists {
 			writeError(w, http.StatusNotFound, "Service not found")
 			return
 		}
 
-		serviceInfo := buildServiceInfo(serviceName, service, c)
+		serviceInfo := buildServiceInfo(keyName, service, c)
 		writeJSON(w, http.StatusOK, serviceInfo)
 		return
 	}

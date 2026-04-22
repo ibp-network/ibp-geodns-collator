@@ -3,10 +3,13 @@ package api
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,7 +72,7 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func Init() {
+func Init() error {
 	log.Log(log.Info, "[CollatorAPI] Initializing API...")
 
 	c := cfg.GetConfig()
@@ -109,8 +112,15 @@ func Init() {
 	// Health check
 	mux.HandleFunc("/api/health", corsMiddleware(handleHealth))
 
-	addr := c.Local.CollatorApi.ListenAddress
-	port := c.Local.CollatorApi.ListenPort
+	host := strings.TrimSpace(c.Local.CollatorApi.ListenAddress)
+	port := strings.TrimSpace(c.Local.CollatorApi.ListenPort)
+	if port == "" {
+		return fmt.Errorf("collator API ListenPort is empty in config")
+	}
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	addr := host + ":" + port
 
 	// Check if SSL environment variables are set
 	certPath = os.Getenv("SSL_CERT")
@@ -119,37 +129,53 @@ func Init() {
 	if certPath != "" && keyPath != "" {
 		// Initialize TLS configuration
 		if err := loadTLSConfig(); err != nil {
-			log.Log(log.Fatal, "[CollatorAPI] Failed to load TLS configuration: %v", err)
-			return
+			return fmt.Errorf("failed to load TLS configuration: %w", err)
 		}
-
-		// Start certificate watcher
-		go watchCertificates()
 
 		// Create HTTPS server
 		server := &http.Server{
-			Addr:    addr + ":" + port,
+			Addr:    addr,
 			Handler: mux,
 			TLSConfig: &tls.Config{
 				GetCertificate: getCertificate,
 			},
 		}
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("failed to listen for HTTPS API on %s: %w", addr, err)
+		}
 
-		log.Log(log.Info, "[CollatorAPI] Starting HTTPS API server on %s:%s", addr, port)
+		// Start certificate watcher only after the listener is live.
+		go watchCertificates()
+
+		log.Log(log.Info, "[CollatorAPI] Starting HTTPS API server on %s:%s", host, port)
 		go func() {
-			if err := server.ListenAndServeTLS("", ""); err != nil {
-				log.Log(log.Fatal, "[CollatorAPI] Failed to start HTTPS server: %v", err)
+			if err := server.Serve(tls.NewListener(listener, server.TLSConfig)); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Log(log.Fatal, "[CollatorAPI] HTTPS server stopped on %s: %v", addr, err)
+				os.Exit(1)
 			}
 		}()
 	} else {
 		// Start HTTP server (no SSL)
-		log.Log(log.Info, "[CollatorAPI] Starting HTTP API server on %s:%s (no SSL configured)", addr, port)
+		server := &http.Server{
+			Addr:    addr,
+			Handler: mux,
+		}
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("failed to listen for HTTP API on %s: %w", addr, err)
+		}
+
+		log.Log(log.Info, "[CollatorAPI] Starting HTTP API server on %s:%s (no SSL configured)", host, port)
 		go func() {
-			if err := http.ListenAndServe(addr+":"+port, mux); err != nil {
-				log.Log(log.Fatal, "[CollatorAPI] Failed to start HTTP server: %v", err)
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Log(log.Fatal, "[CollatorAPI] HTTP server stopped on %s: %v", addr, err)
+				os.Exit(1)
 			}
 		}()
 	}
+
+	return nil
 }
 
 // loadTLSConfig loads the certificate and key from disk

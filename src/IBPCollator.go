@@ -48,7 +48,10 @@ func main() {
 	}
 
 	billing.Init() // ← billing subsystem
-	api.Init()     // ← NEW: API subsystem
+	if err := api.Init(); err != nil {
+		log.Log(log.Fatal, "collator API init: %v", err)
+		os.Exit(1)
+	}
 
 	if err := nats.Connect(); err != nil {
 		log.Log(log.Fatal, "NATS connect: %v", err)
